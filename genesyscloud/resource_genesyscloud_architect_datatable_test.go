@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceArchitectDatatable(t *testing.T) {
@@ -41,8 +41,8 @@ func TestAccResourceArchitectDatatable(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create datatable with a key and one other property
@@ -141,7 +141,7 @@ func testVerifyDatatablesDestroyed(state *terraform.State) error {
 		datatable, resp, err := sdkGetArchitectDatatable(rs.Primary.ID, "", archAPI)
 		if datatable != nil {
 			return fmt.Errorf("Datatable (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Datatable not found as expected
 			continue
 		} else {

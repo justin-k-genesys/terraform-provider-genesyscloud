@@ -4,15 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 var (
@@ -109,8 +114,8 @@ var (
 	}
 )
 
-func getAllAuthRoles(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllAuthRoles(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -125,17 +130,17 @@ func getAllAuthRoles(_ context.Context, clientConfig *platformclientv2.Configura
 		}
 
 		for _, role := range *roles.Entities {
-			resources[*role.Id] = &ResourceMeta{Name: *role.Name}
+			resources[*role.Id] = &resourceExporter.ResourceMeta{Name: *role.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func authRoleExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllAuthRoles),
-		RefAttrs: map[string]*RefAttrSettings{
+func AuthRoleExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllAuthRoles),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"permission_policies.conditions.terms.operands.queue_id": {RefType: "genesyscloud_routing_queue"},
 			"permission_policies.conditions.terms.operands.user_id":  {RefType: "genesyscloud_user"},
 		},
@@ -147,14 +152,14 @@ func authRoleExporter() *ResourceExporter {
 	}
 }
 
-func resourceAuthRole() *schema.Resource {
+func ResourceAuthRole() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Authorization Role",
 
-		CreateContext: createWithPooledClient(createAuthRole),
-		ReadContext:   readWithPooledClient(readAuthRole),
-		UpdateContext: updateWithPooledClient(updateAuthRole),
-		DeleteContext: deleteWithPooledClient(deleteAuthRole),
+		CreateContext: CreateWithPooledClient(createAuthRole),
+		ReadContext:   ReadWithPooledClient(readAuthRole),
+		UpdateContext: UpdateWithPooledClient(updateAuthRole),
+		DeleteContext: DeleteWithPooledClient(deleteAuthRole),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -183,7 +188,7 @@ func resourceAuthRole() *schema.Resource {
 				Elem:        rolePermPolicyResource,
 			},
 			"default_role_id": {
-				Description: "Internal ID for an existing default role, e.g. 'employee'. This can be set to manage permissions on existing default roles.",
+				Description: "Internal ID for an existing default role, e.g. 'employee'. This can be set to manage permissions on existing default roles.  Note: Changing the default_role_id attribute will cause this auth_role to be dropped and recreated with a new ID.",
 				Type:        schema.TypeString,
 				ForceNew:    true,
 				Optional:    true,
@@ -197,7 +202,7 @@ func createAuthRole(ctx context.Context, d *schema.ResourceData, meta interface{
 	description := d.Get("description").(string)
 	defaultRoleID := d.Get("default_role_id").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	log.Printf("Creating role %s", name)
@@ -227,21 +232,21 @@ func createAuthRole(ctx context.Context, d *schema.ResourceData, meta interface{
 }
 
 func readAuthRole(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	log.Printf("Reading role %s", d.Id())
 
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
-		role, resp, getErr := authAPI.GetAuthorizationRole(d.Id(), nil)
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
+		role, resp, getErr := authAPI.GetAuthorizationRole(d.Id(), false, nil)
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read role %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read role %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read role %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read role %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceAuthRole())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceAuthRole())
 		d.Set("name", *role.Name)
 
 		if role.Description != nil {
@@ -257,7 +262,7 @@ func readAuthRole(ctx context.Context, d *schema.ResourceData, meta interface{})
 		}
 
 		if role.Permissions != nil {
-			d.Set("permissions", stringListToSet(*role.Permissions))
+			d.Set("permissions", lists.StringListToSet(*role.Permissions))
 		} else {
 			d.Set("permissions", nil)
 		}
@@ -278,7 +283,7 @@ func updateAuthRole(ctx context.Context, d *schema.ResourceData, meta interface{
 	description := d.Get("description").(string)
 	defaultRoleID := d.Get("default_role_id").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	log.Printf("Updating role %s", name)
@@ -302,7 +307,7 @@ func deleteAuthRole(ctx context.Context, d *schema.ResourceData, meta interface{
 	name := d.Get("name").(string)
 	defaultRoleID := d.Get("default_role_id").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	if defaultRoleID != "" {
@@ -326,23 +331,23 @@ func deleteAuthRole(ctx context.Context, d *schema.ResourceData, meta interface{
 		return diag.Errorf("Failed to delete role %s: %s", name, err)
 	}
 
-	return withRetries(ctx, 60*time.Second, func() *resource.RetryError {
-		_, resp, err := authAPI.GetAuthorizationRole(d.Id(), nil)
+	return WithRetries(ctx, 60*time.Second, func() *retry.RetryError {
+		_, resp, err := authAPI.GetAuthorizationRole(d.Id(), false, nil)
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// role deleted
 				log.Printf("Deleted role %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting role %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting role %s: %s", d.Id(), err))
 		}
-		return resource.RetryableError(fmt.Errorf("Role %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Role %s still exists", d.Id()))
 	})
 }
 
 func buildSdkRolePermissions(d *schema.ResourceData) *[]string {
 	if permConfig, ok := d.GetOk("permissions"); ok {
-		return setToStringList(permConfig.(*schema.Set))
+		return lists.SetToStringList(permConfig.(*schema.Set))
 	}
 	return nil
 }
@@ -372,7 +377,7 @@ func buildSdkRolePermPolicies(d *schema.ResourceData) *[]platformclientv2.Domain
 
 func buildSdkPermPolicyActions(policyAttrs map[string]interface{}) *[]string {
 	if actions, ok := policyAttrs["action_set"]; ok {
-		return setToStringList(actions.(*schema.Set))
+		return lists.SetToStringList(actions.(*schema.Set))
 	}
 	return nil
 }
@@ -443,7 +448,7 @@ func flattenRolePermissionPolicies(policies []platformclientv2.Domainpermissionp
 			policyMap["entity_name"] = *sdkPolicy.EntityName
 		}
 		if sdkPolicy.ActionSet != nil {
-			policyMap["action_set"] = stringListToSet(*sdkPolicy.ActionSet)
+			policyMap["action_set"] = lists.StringListToSet(*sdkPolicy.ActionSet)
 		}
 		if sdkPolicy.ResourceConditionNode != nil {
 			policyMap["conditions"] = flattenRoleConditionNode(*sdkPolicy.ResourceConditionNode)
@@ -493,11 +498,17 @@ func flattenRoleConditionOperands(operands []platformclientv2.Domainresourcecond
 			operandMap["type"] = *operand.VarType
 			switch *operand.VarType {
 			case "USER":
-				operandMap["user_id"] = *operand.User.Id
+				if operand.User != nil {
+					operandMap["user_id"] = *operand.User.Id
+				}
 			case "QUEUE":
-				operandMap["queue_id"] = *operand.Queue.Id
+				if operand.Queue != nil {
+					operandMap["queue_id"] = *operand.Queue.Id
+				}
 			default:
-				operandMap["value"] = *operand.Value
+				if operand.Value != nil {
+					operandMap["value"] = *operand.Value
+				}
 			}
 		}
 		operandSet.Add(operandMap)
@@ -517,4 +528,32 @@ func getRoleID(defaultRoleID string, authAPI *platformclientv2.AuthorizationApi)
 	}
 
 	return *(*roles.Entities)[0].Id, nil
+}
+
+func GenerateAuthRoleResource(
+	resourceID string,
+	name string,
+	description string,
+	nestedBlocks ...string) string {
+	return fmt.Sprintf(`resource "genesyscloud_auth_role" "%s" {
+		name = "%s"
+		description = "%s"
+		%s
+	}
+	`, resourceID, name, description, strings.Join(nestedBlocks, "\n"))
+}
+
+func GenerateRolePermissions(permissions ...string) string {
+	return fmt.Sprintf(`
+		permissions = [%s]
+	`, strings.Join(permissions, ","))
+}
+
+func GenerateRolePermPolicy(domain string, entityName string, actions ...string) string {
+	return fmt.Sprintf(` permission_policies {
+		domain = "%s"
+		entity_name = "%s"
+		action_set = [%s]
+	}
+	`, domain, entityName, strings.Join(actions, ","))
 }

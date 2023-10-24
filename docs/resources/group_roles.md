@@ -19,7 +19,7 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_group_roles" "group1-roles" {
+resource "genesyscloud_group_roles" "group-roles" {
   group_id = genesyscloud_user.group1.id
   roles {
     role_id      = genesyscloud_auth_role.custom-role.id
@@ -33,11 +33,11 @@ resource "genesyscloud_group_roles" "group1-roles" {
 
 ### Required
 
-- `group_id` (String) Group ID that will be managed by this resource.
+- `group_id` (String) Group ID that will be managed by this resource. Changing the group_id attribute for the groups_role object will cause the existing group_roles object to be dropped and recreated with a new ID
 
 ### Optional
 
-- `roles` (Block Set) Roles and their divisions assigned to this group. (see [below for nested schema](#nestedblock--roles))
+- `roles` (Block List) Roles and their divisions assigned to this group. (see [below for nested schema](#nestedblock--roles))
 
 ### Read-Only
 

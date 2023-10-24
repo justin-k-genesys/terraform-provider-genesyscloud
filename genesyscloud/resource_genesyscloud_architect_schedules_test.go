@@ -2,13 +2,15 @@ package genesyscloud
 
 import (
 	"fmt"
+	"log"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
-
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceArchitectSchedules(t *testing.T) {
@@ -29,8 +31,8 @@ func TestAccResourceArchitectSchedules(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
@@ -49,7 +51,7 @@ func TestAccResourceArchitectSchedules(t *testing.T) {
 					resource.TestCheckResourceAttr("genesyscloud_architect_schedules."+schedResource1, "start", start),
 					resource.TestCheckResourceAttr("genesyscloud_architect_schedules."+schedResource1, "end", end),
 					resource.TestCheckResourceAttr("genesyscloud_architect_schedules."+schedResource1, "rrule", rrule),
-					testDefaultHomeDivision("genesyscloud_architect_schedules."+schedResource1),
+					TestDefaultHomeDivision("genesyscloud_architect_schedules."+schedResource1),
 				),
 			},
 			{
@@ -69,7 +71,7 @@ func TestAccResourceArchitectSchedules(t *testing.T) {
 					resource.TestCheckResourceAttr("genesyscloud_architect_schedules."+schedResource1, "start", start2),
 					resource.TestCheckResourceAttr("genesyscloud_architect_schedules."+schedResource1, "end", end),
 					resource.TestCheckResourceAttr("genesyscloud_architect_schedules."+schedResource1, "rrule", rrule),
-					testDefaultHomeDivision("genesyscloud_architect_schedules."+schedResource1),
+					TestDefaultHomeDivision("genesyscloud_architect_schedules."+schedResource1),
 				),
 			},
 			{
@@ -122,6 +124,33 @@ func generateArchitectSchedulesResource(
 	`, schedResource1, name, divisionId, description, start, end, rrule)
 }
 
+func cleanupArchitectSchedules(idPrefix string) {
+	architectApi := platformclientv2.NewArchitectApi()
+
+	for pageNum := 1; ; pageNum++ {
+		const pageSize = 100
+		architectSchedules, _, getErr := architectApi.GetArchitectSchedules(pageNum, pageSize, "", "", "", nil)
+		if getErr != nil {
+			return
+		}
+
+		if architectSchedules.Entities == nil || len(*architectSchedules.Entities) == 0 {
+			break
+		}
+
+		for _, schedule := range *architectSchedules.Entities {
+			if schedule.Name != nil && strings.HasPrefix(*schedule.Name, idPrefix) {
+				_, delErr := architectApi.DeleteArchitectSchedule(*schedule.Id)
+				if delErr != nil {
+					diag.Errorf("failed to delete architect schedule %s (%s): %s", *schedule.Id, *schedule.Name, delErr)
+					return
+				}
+				log.Printf("Deleted architect schedule %s (%s)", *schedule.Id, *schedule.Name)
+			}
+		}
+	}
+}
+
 func testVerifySchedulesDestroyed(state *terraform.State) error {
 	archAPI := platformclientv2.NewArchitectApi()
 	for _, rs := range state.RootModule().Resources {
@@ -132,7 +161,7 @@ func testVerifySchedulesDestroyed(state *terraform.State) error {
 		sched, resp, err := archAPI.GetArchitectSchedule(rs.Primary.ID)
 		if sched != nil {
 			return fmt.Errorf("Schedule (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Schedule not found as expected
 			continue
 		} else {

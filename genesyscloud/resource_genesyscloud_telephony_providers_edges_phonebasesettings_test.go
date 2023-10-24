@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourcePhoneBaseSettings(t *testing.T) {
@@ -24,11 +24,11 @@ func TestAccResourcePhoneBaseSettings(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
-				Config: generatePhoneBaseSettingsResourceWithCustomAttrs(
+				Config: GeneratePhoneBaseSettingsResourceWithCustomAttrs(
 					phoneBaseSettingsRes,
 					name1,
 					description1,
@@ -55,7 +55,7 @@ func TestAccResourcePhoneBaseSettings(t *testing.T) {
 			},
 			// Update with new name, description and properties
 			{
-				Config: generatePhoneBaseSettingsResourceWithCustomAttrs(
+				Config: GeneratePhoneBaseSettingsResourceWithCustomAttrs(
 					phoneBaseSettingsRes,
 					name2,
 					description2,
@@ -101,7 +101,7 @@ func testVerifyPhoneBaseSettingsDestroyed(state *terraform.State) error {
 		phoneBaseSettings, resp, err := edgesAPI.GetTelephonyProvidersEdgesPhonebasesetting(rs.Primary.ID)
 		if phoneBaseSettings != nil {
 			return fmt.Errorf("PhoneBaseSettings (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// PhoneBaseSettings not found as expected
 			continue
 		} else {
@@ -113,59 +113,44 @@ func testVerifyPhoneBaseSettingsDestroyed(state *terraform.State) error {
 	return nil
 }
 
-func generatePhoneBaseSettingsResourceWithCustomAttrs(
-	phoneBaseSettingsRes,
-	name,
-	description,
-	phoneMetaBaseId string,
-	otherAttrs ...string) string {
-	return fmt.Sprintf(`resource "genesyscloud_telephony_providers_edges_phonebasesettings" "%s" {
-		name = "%s"
-		description = "%s"
-		phone_meta_base_id = "%s"
-		%s
-	}
-	`, phoneBaseSettingsRes, name, description, phoneMetaBaseId, strings.Join(otherAttrs, "\n"))
-}
-
 func generatePhoneBaseSettingsProperties(phoneLabel, phoneMaxLineKeys, phoneMwiEnabled, phoneMwiSubscribe, phoneStandalone string, phoneStations []string) string {
 	// A random selection of properties
-	return "properties = " + generateJsonEncodedProperties(
-		generateJsonProperty(
-			"phone_label", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", strconv.Quote(phoneLabel)),
+	return "properties = " + GenerateJsonEncodedProperties(
+		GenerateJsonProperty(
+			"phone_label", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", strconv.Quote(phoneLabel)),
 					)))),
-		generateJsonProperty(
-			"phone_maxLineKeys", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", phoneMaxLineKeys),
+		GenerateJsonProperty(
+			"phone_maxLineKeys", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", phoneMaxLineKeys),
 					)))),
-		generateJsonProperty(
-			"phone_mwi_enabled", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", phoneMwiEnabled),
+		GenerateJsonProperty(
+			"phone_mwi_enabled", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", phoneMwiEnabled),
 					)))),
-		generateJsonProperty(
-			"phone_mwi_subscribe", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", phoneMwiSubscribe),
+		GenerateJsonProperty(
+			"phone_mwi_subscribe", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", phoneMwiSubscribe),
 					)))),
-		generateJsonProperty(
-			"phone_standalone", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", phoneStandalone),
+		GenerateJsonProperty(
+			"phone_standalone", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", phoneStandalone),
 					)))),
-		generateJsonProperty(
-			"phone_stations", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonArrayProperty("instance", strings.Join(phoneStations, ",")),
+		GenerateJsonProperty(
+			"phone_stations", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonArrayProperty("instance", strings.Join(phoneStations, ",")),
 					)))),
 	)
 }

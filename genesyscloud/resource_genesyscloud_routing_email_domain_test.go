@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceRoutingEmailDomainSub(t *testing.T) {
@@ -19,19 +21,19 @@ func TestAccResourceRoutingEmailDomainSub(t *testing.T) {
 		domainRes = "routing-domain1"
 		domainId  = "terraform" + strconv.Itoa(rand.Intn(1000))
 	)
-	err := authorizeSdk()
+	_, err := AuthorizeSdk()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanupRoutingEmailDomains()
+	CleanupRoutingEmailDomains()
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create purecloud subdomain
-				Config: generateRoutingEmailDomainResource(
+				Config: GenerateRoutingEmailDomainResource(
 					domainRes,
 					domainId,
 					trueValue, // Subdomain clear
@@ -60,19 +62,19 @@ func TestAccResourceRoutingEmailDomainCustom(t *testing.T) {
 		domainId        = "terraform" + strconv.Itoa(rand.Intn(1000)) + ".com"
 		mailFromDomain1 = "test." + domainId
 	)
-	err := authorizeSdk()
+	_, err := AuthorizeSdk()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanupRoutingEmailDomains()
+	CleanupRoutingEmailDomains()
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create custom domain
-				Config: generateRoutingEmailDomainResource(
+				Config: GenerateRoutingEmailDomainResource(
 					domainRes,
 					domainId,
 					falseValue, // Subdomain
@@ -86,7 +88,7 @@ func TestAccResourceRoutingEmailDomainCustom(t *testing.T) {
 			},
 			{
 				// Update custom domain
-				Config: generateRoutingEmailDomainResource(
+				Config: GenerateRoutingEmailDomainResource(
 					domainRes,
 					domainId,
 					falseValue, // Subdomain
@@ -103,36 +105,23 @@ func TestAccResourceRoutingEmailDomainCustom(t *testing.T) {
 	})
 }
 
-func generateRoutingEmailDomainResource(
-	resourceID string,
-	domainID string,
-	subdomain string,
-	fromDomain string) string {
-	return fmt.Sprintf(`resource "genesyscloud_routing_email_domain" "%s" {
-		domain_id = "%s"
-		subdomain = %s
-        mail_from_domain = %s
-	}
-	`, resourceID, domainID, subdomain, fromDomain)
-}
-
 func testVerifyRoutingEmailDomainDestroyed(state *terraform.State) error {
 	routingAPI := platformclientv2.NewRoutingApi()
 
-	diagErr := withRetries(context.Background(), 180*time.Second, func() *resource.RetryError {
+	diagErr := WithRetries(context.Background(), 180*time.Second, func() *retry.RetryError {
 		for _, rs := range state.RootModule().Resources {
 			if rs.Type != "genesyscloud_routing_email_domain" {
 				continue
 			}
 			_, resp, err := routingAPI.GetRoutingEmailDomain(rs.Primary.ID)
 			if err != nil {
-				if isStatus404(resp) {
+				if IsStatus404(resp) {
 					continue
 				}
-				return resource.NonRetryableError(fmt.Errorf("Unexpected error: %s", err))
+				return retry.NonRetryableError(fmt.Errorf("Unexpected error: %s", err))
 			}
 
-			return resource.RetryableError(fmt.Errorf("Routing email domain %s still exists", rs.Primary.ID))
+			return retry.RetryableError(fmt.Errorf("Routing email domain %s still exists", rs.Primary.ID))
 		}
 		return nil
 	})

@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func dataSourceLocation() *schema.Resource {
+func DataSourceLocation() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Location. Select a location by name.",
-		ReadContext: readWithPooledClient(dataSourceLocationRead),
+		ReadContext: ReadWithPooledClient(dataSourceLocationRead),
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Description: "Location name.",
@@ -26,7 +27,7 @@ func dataSourceLocation() *schema.Resource {
 }
 
 func dataSourceLocationRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*providerMeta).ClientConfig
+	sdkConfig := m.(*ProviderMeta).ClientConfig
 	locationsAPI := platformclientv2.NewLocationsApiWithConfig(sdkConfig)
 
 	exactSearchType := "EXACT"
@@ -39,16 +40,16 @@ func dataSourceLocationRead(ctx context.Context, d *schema.ResourceData, m inter
 		Fields:  &[]string{nameField},
 	}
 
-	return withRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		locations, _, getErr := locationsAPI.PostLocationsSearch(platformclientv2.Locationsearchrequest{
 			Query: &[]platformclientv2.Locationsearchcriteria{searchCriteria},
 		})
 		if getErr != nil {
-			return resource.NonRetryableError(fmt.Errorf("Error requesting location %s: %s", nameStr, getErr))
+			return retry.NonRetryableError(fmt.Errorf("Error requesting location %s: %s", nameStr, getErr))
 		}
 
 		if *locations.Total == 0 {
-			return resource.RetryableError(fmt.Errorf("No locations found with search criteria %v ", searchCriteria))
+			return retry.RetryableError(fmt.Errorf("No locations found with search criteria %v ", searchCriteria))
 		}
 
 		// Select first location in the list

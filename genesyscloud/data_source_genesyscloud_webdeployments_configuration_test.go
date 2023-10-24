@@ -16,8 +16,8 @@ func TestAccDataSourceWebDeploymentsConfiguration(t *testing.T) {
 		resourceNameReference    = fullResourceName + ".name"
 	)
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Search by name

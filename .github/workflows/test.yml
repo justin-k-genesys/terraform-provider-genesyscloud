@@ -18,13 +18,13 @@ jobs:
     steps:
 
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v4
       with:
         go-version: '1.18'
       id: go
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Get dependencies
       run: |
@@ -50,18 +50,18 @@ jobs:
     steps:
 
     - name: Set up Go
-      uses: actions/setup-go@v3
+      uses: actions/setup-go@v4
       with:
         go-version: '1.18'
       id: go
 
     - name: Setup Terraform CLI
-      uses: hashicorp/setup-terraform@v2.0.0
+      uses: hashicorp/setup-terraform@v2.0.3
       with:
         terraform_version: ${{ matrix.terraform }}
 
     - name: Check out code into the Go module directory
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Get dependencies
       run: |
@@ -71,7 +71,7 @@ jobs:
       timeout-minutes: 80
       env:
         TF_ACC: "1"
-        TF_LOG: "INFO"
+        TF_LOG: "DEBUG"
         TF_LOG_PATH: "../test.log"
         TF_ACC_TERRAFORM_VERSION: ${{ matrix.terraform }}
 
@@ -85,7 +85,8 @@ jobs:
           if [ "$TF_ACC_TERRAFORM_VERSION" == "0.14.7" ]; then
             sleep 300 # This avoids conflicts with the API and other related issues e.g. too many routing email domains
           fi
-        go test -timeout 80m -v -cover ./genesyscloud/ -parallel 20
+        go test -timeout 80m -v -cover ./genesyscloud/... -parallel 20 -coverprofile=coverage.out
+        go tool cover -html coverage.out cover.html
 
     - name: 'Upload Export Result'
       if: ${{ always() }}

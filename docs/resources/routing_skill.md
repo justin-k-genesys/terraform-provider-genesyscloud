@@ -19,8 +19,8 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_routing_skill" "test_skill" {
-  name = "Test Skill"
+resource "genesyscloud_routing_skill" "example_skill" {
+  name = "Example Skill"
 }
 ```
 
@@ -29,7 +29,7 @@ resource "genesyscloud_routing_skill" "test_skill" {
 
 ### Required
 
-- `name` (String) Skill name.
+- `name` (String) Skill name. Changing the name attribute will cause the skill object object to dropped and recreated with a new ID.
 
 ### Read-Only
 

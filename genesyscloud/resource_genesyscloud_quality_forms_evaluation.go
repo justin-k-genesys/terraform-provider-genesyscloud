@@ -4,15 +4,20 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 var (
@@ -153,8 +158,8 @@ var (
 	}
 )
 
-func getAllEvaluationForms(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllEvaluationForms(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -169,28 +174,28 @@ func getAllEvaluationForms(_ context.Context, clientConfig *platformclientv2.Con
 		}
 
 		for _, evaluationForm := range *evaluationForms.Entities {
-			resources[*evaluationForm.Id] = &ResourceMeta{Name: *evaluationForm.Name}
+			resources[*evaluationForm.Id] = &resourceExporter.ResourceMeta{Name: *evaluationForm.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func evaluationFormExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllEvaluationForms),
-		RefAttrs:         map[string]*RefAttrSettings{}, // No references
+func EvaluationFormExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllEvaluationForms),
+		RefAttrs:         map[string]*resourceExporter.RefAttrSettings{}, // No references
 		AllowZeroValues:  []string{"question_groups.questions.answer_options.value", "question_groups.weight"},
 	}
 }
 
-func resourceEvaluationForm() *schema.Resource {
+func ResourceEvaluationForm() *schema.Resource {
 	return &schema.Resource{
 		Description:   "Genesys Cloud Evaluation Forms",
-		CreateContext: createWithPooledClient(createEvaluationForm),
-		ReadContext:   readWithPooledClient(readEvaluationForm),
-		UpdateContext: updateWithPooledClient(updateEvaluationForm),
-		DeleteContext: deleteWithPooledClient(deleteEvaluationForm),
+		CreateContext: CreateWithPooledClient(createEvaluationForm),
+		ReadContext:   ReadWithPooledClient(readEvaluationForm),
+		UpdateContext: UpdateWithPooledClient(updateEvaluationForm),
+		DeleteContext: DeleteWithPooledClient(deleteEvaluationForm),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -227,7 +232,7 @@ func createEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 		return qgErr
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	log.Printf("Creating Evaluation Form %s", name)
@@ -236,7 +241,7 @@ func createEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 		QuestionGroups: questionGroups,
 	})
 	if err != nil {
-		return diag.Errorf("Failed to create evaluation form %s", name)
+		return diag.Errorf("Failed to create evaluation form %s: %s", name, err)
 	}
 
 	// Make sure form is properly created
@@ -262,20 +267,20 @@ func createEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 }
 
 func readEvaluationForm(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 	log.Printf("Reading evaluation form %s", d.Id())
 
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		evaluationForm, resp, getErr := qualityAPI.GetQualityFormsEvaluation(d.Id())
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read evaluation form %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read evaluation form %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read evaluation form %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read evaluation form %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceEvaluationForm())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceEvaluationForm())
 		if evaluationForm.Name != nil {
 			d.Set("name", *evaluationForm.Name)
 		}
@@ -299,7 +304,7 @@ func updateEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 		return qgErr
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	// Get the latest unpublished version of the form
@@ -340,7 +345,7 @@ func updateEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 func deleteEvaluationForm(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	qualityAPI := platformclientv2.NewQualityApiWithConfig(sdkConfig)
 
 	// Get the latest unpublished version of the form
@@ -354,21 +359,21 @@ func deleteEvaluationForm(ctx context.Context, d *schema.ResourceData, meta inte
 
 	log.Printf("Deleting evaluation form %s", name)
 	if _, err := qualityAPI.DeleteQualityFormsEvaluation(d.Id()); err != nil {
-		return diag.Errorf("Failed to delete evaluation form %s: %s", name, err)
+		return diag.Errorf("Failed to delete evaluation form %s: %v", name, err)
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, resp, err := qualityAPI.GetQualityFormsEvaluation(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// Evaluation form deleted
 				log.Printf("Deleted evaluation form %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting evaluation form %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting evaluation form %s: %s", d.Id(), err))
 		}
 
-		return resource.RetryableError(fmt.Errorf("Evaluation form %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Evaluation form %s still exists", d.Id()))
 	})
 }
 
@@ -588,8 +593,139 @@ func flattenVisibilityCondition(visibilityCondition *platformclientv2.Visibility
 		visibilityConditionMap["combining_operation"] = *visibilityCondition.CombiningOperation
 	}
 	if visibilityCondition.Predicates != nil {
-		visibilityConditionMap["predicates"] = interfaceListToStrings(*visibilityCondition.Predicates)
+		visibilityConditionMap["predicates"] = lists.InterfaceListToStrings(*visibilityCondition.Predicates)
 	}
 
 	return []interface{}{visibilityConditionMap}
+}
+
+func GenerateEvaluationFormResource(resourceID string, evaluationForm *EvaluationFormStruct) string {
+	return fmt.Sprintf(`resource "genesyscloud_quality_forms_evaluation" "%s" {
+		name = "%s"
+		published = %v
+		%s
+	}
+	`, resourceID,
+		evaluationForm.Name,
+		evaluationForm.Published,
+		GenerateEvaluationFormQuestionGroups(&evaluationForm.QuestionGroups),
+	)
+}
+
+func GenerateEvaluationFormQuestionGroups(questionGroups *[]EvaluationFormQuestionGroupStruct) string {
+	if questionGroups == nil {
+		return ""
+	}
+
+	questionGroupsString := ""
+
+	for _, questionGroup := range *questionGroups {
+		questionGroupString := fmt.Sprintf(`
+        question_groups {
+            name = "%s"
+            default_answers_to_highest = %v
+            default_answers_to_na  = %v
+            na_enabled = %v
+            weight = %v
+            manual_weight = %v
+            %s
+            %s
+        }
+        `, questionGroup.Name,
+			questionGroup.DefaultAnswersToHighest,
+			questionGroup.DefaultAnswersToNA,
+			questionGroup.NaEnabled,
+			questionGroup.Weight,
+			questionGroup.ManualWeight,
+			GenerateEvaluationFormQuestions(&questionGroup.Questions),
+			GenerateFormVisibilityCondition(&questionGroup.VisibilityCondition),
+		)
+
+		questionGroupsString += questionGroupString
+	}
+
+	return questionGroupsString
+}
+
+func GenerateEvaluationFormQuestions(questions *[]EvaluationFormQuestionStruct) string {
+	if questions == nil {
+		return ""
+	}
+
+	questionsString := ""
+
+	for _, question := range *questions {
+		questionString := fmt.Sprintf(`
+        questions {
+            text = "%s"
+            help_text = "%s"
+            na_enabled = %v
+            comments_required = %v
+            is_kill = %v
+            is_critical = %v
+            %s
+            %s
+        }
+        `, question.Text,
+			question.HelpText,
+			question.NaEnabled,
+			question.CommentsRequired,
+			question.IsKill,
+			question.IsCritical,
+			GenerateFormVisibilityCondition(&question.VisibilityCondition),
+			GenerateFormAnswerOptions(&question.AnswerOptions),
+		)
+
+		questionsString += questionString
+	}
+
+	return questionsString
+}
+
+func GenerateFormAnswerOptions(answerOptions *[]AnswerOptionStruct) string {
+	if answerOptions == nil {
+		return ""
+	}
+
+	answerOptionsString := ""
+
+	for _, answerOption := range *answerOptions {
+		answerOptionString := fmt.Sprintf(`
+        answer_options {
+            text = "%s"
+            value = %v
+        }
+        `, answerOption.Text,
+			answerOption.Value,
+		)
+
+		answerOptionsString += answerOptionString
+	}
+
+	return fmt.Sprintf(`%s`, answerOptionsString)
+}
+
+func GenerateFormVisibilityCondition(condition *VisibilityConditionStruct) string {
+	if condition == nil || len(condition.CombiningOperation) == 0 {
+		return ""
+	}
+
+	predicateString := ""
+
+	for i, predicate := range condition.Predicates {
+		if i > 0 {
+			predicateString += ", "
+		}
+
+		predicateString += strconv.Quote(predicate)
+	}
+
+	return fmt.Sprintf(`
+	visibility_condition {
+        combining_operation = "%s"
+        predicates = [%s]
+    }
+	`, condition.CombiningOperation,
+		predicateString,
+	)
 }

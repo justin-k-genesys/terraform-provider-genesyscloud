@@ -3,10 +3,13 @@ page_title: "genesyscloud_user_roles Resource - terraform-provider-genesyscloud"
 subcategory: ""
 description: |-
   Genesys Cloud User Roles maintains user role assignments.
+  Terraform expects to manage the resources that are defined in its stack. You can use this resource to assign roles to existing users that are not managed by Terraform. However, one thing you have to remember is that when you use this resource to assign roles to existing users, you must define all roles assigned to those users in this resource. Otherwise, you will inadvertently drop all of the existing roles assigned to the user and replace them with the one defined in this resource. Keep this in mind, as the author of this note inadvertently stripped his Genesys admin account of administrator privileges while using this resource to assign a role to his account. The best lessons in life are often free and self-inflicted.
 ---
 # genesyscloud_user_roles (Resource)
 
 Genesys Cloud User Roles maintains user role assignments.
+
+Terraform expects to manage the resources that are defined in its stack. You can use this resource to assign roles to existing users that are not managed by Terraform. However, one thing you have to remember is that when you use this resource to assign roles to existing users, you must define all roles assigned to those users in this resource. Otherwise, you will inadvertently drop all of the existing roles assigned to the user and replace them with the one defined in this resource. Keep this in mind, as the author of this note inadvertently stripped his Genesys admin account of administrator privileges while using this resource to assign a role to his account. The best lessons in life are often free and self-inflicted.
 
 ## API Usage
 The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Client has been granted the necessary scopes and permissions to perform these operations:
@@ -19,8 +22,8 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_user_roles" "user1-roles" {
-  user_id = genesyscloud_user.user1.id
+resource "genesyscloud_user_roles" "user-roles" {
+  user_id = genesyscloud_user.user.id
   roles {
     role_id      = genesyscloud_auth_role.custom-role.id
     division_ids = [genesyscloud_auth_division.marketing.id]
@@ -33,11 +36,11 @@ resource "genesyscloud_user_roles" "user1-roles" {
 
 ### Required
 
-- `user_id` (String) User ID that will be managed by this resource.
+- `user_id` (String) User ID that will be managed by this resource. Changing the user_id attribute will cause the roles object to be dropped and recreated with a new ID.
 
 ### Optional
 
-- `roles` (Block Set) Roles and their divisions assigned to this user. (see [below for nested schema](#nestedblock--roles))
+- `roles` (Block List) Roles and their divisions assigned to this user. (see [below for nested schema](#nestedblock--roles))
 
 ### Read-Only
 

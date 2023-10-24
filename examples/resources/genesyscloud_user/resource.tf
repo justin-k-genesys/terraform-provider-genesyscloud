@@ -1,4 +1,4 @@
-resource "genesyscloud_user" "test_user" {
+resource "genesyscloud_user" "example_user" {
   email           = "john@example.com"
   name            = "John Doe"
   password        = "initial-password"
@@ -6,7 +6,7 @@ resource "genesyscloud_user" "test_user" {
   state           = "active"
   department      = "Development"
   title           = "Senior Director"
-  manager         = genesyscloud_user.test-user-manager.id
+  manager         = genesyscloud_user.example-user-manager.id
   acd_auto_answer = true
   profile_skills  = ["Java", "Go"]
   certifications  = ["Certified Developer"]
@@ -16,7 +16,7 @@ resource "genesyscloud_user" "test_user" {
       type    = "HOME"
     }
     phone_numbers {
-      number     = "3174181234"
+      number     = "+13174181234"
       media_type = "PHONE"
       type       = "MOBILE"
     }
@@ -58,11 +58,6 @@ resource "genesyscloud_user" "test_user" {
       maximum_capacity          = 2
       include_non_acd           = false
       interruptible_media_types = ["call", "chat"]
-    }
-    video {
-      maximum_capacity          = 1
-      include_non_acd           = false
-      interruptible_media_types = ["call"]
     }
     message {
       maximum_capacity          = 4

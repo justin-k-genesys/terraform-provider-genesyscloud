@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceRoutingLanguageBasic(t *testing.T) {
@@ -17,12 +17,12 @@ func TestAccResourceRoutingLanguageBasic(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
-				Config: generateRoutingLanguageResource(
+				Config: GenerateRoutingLanguageResource(
 					langResource1,
 					langName1,
 				),
@@ -41,30 +41,21 @@ func TestAccResourceRoutingLanguageBasic(t *testing.T) {
 	})
 }
 
-func generateRoutingLanguageResource(
-	resourceID string,
-	name string) string {
-	return fmt.Sprintf(`resource "genesyscloud_routing_language" "%s" {
-		name = "%s"
-	}
-	`, resourceID, name)
-}
-
 func testVerifyLanguagesDestroyed(state *terraform.State) error {
-	languagesAPI := platformclientv2.NewLanguagesApi()
+	routingApi := platformclientv2.NewRoutingApi()
 	for _, rs := range state.RootModule().Resources {
 		if rs.Type != "genesyscloud_routing_language" {
 			continue
 		}
 
-		lang, resp, err := languagesAPI.GetRoutingLanguage(rs.Primary.ID)
+		lang, resp, err := routingApi.GetRoutingLanguage(rs.Primary.ID)
 		if lang != nil {
 			if lang.State != nil && *lang.State == "deleted" {
 				// Language deleted
 				continue
 			}
 			return fmt.Errorf("Language (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Language not found as expected
 			continue
 		} else {

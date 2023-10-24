@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
+
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceAuthRoleDefault(t *testing.T) {
@@ -30,22 +32,22 @@ func TestAccResourceAuthRoleDefault(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Modify default role
-				Config: generateAuthRoleResource(
+				Config: GenerateAuthRoleResource(
 					roleResource2,
 					defaultRoleName,
 					roleDesc1,
 					"default_role_id = "+strconv.Quote(defaultRoleID),
-					generateRolePermissions(strconv.Quote(perm1)),
-					generateRolePermPolicy(directoryDom, userEntity, strconv.Quote(addAction)),
+					GenerateRolePermissions(strconv.Quote(perm1)),
+					GenerateRolePermPolicy(directoryDom, userEntity, strconv.Quote(addAction)),
 					// Keep existing permissions on default role
-					generateRolePermPolicy(authDom, orgTrusteeGroupEntity, strconv.Quote(viewAction)),
-					generateRolePermPolicy(authDom, orgTrusteeUserEntity, strconv.Quote(viewAction)),
-					generateRolePermPolicy(authDom, orgTrustorEntity, strconv.Quote(viewAction)),
+					GenerateRolePermPolicy(authDom, orgTrusteeGroupEntity, strconv.Quote(viewAction)),
+					GenerateRolePermPolicy(authDom, orgTrusteeUserEntity, strconv.Quote(viewAction)),
+					GenerateRolePermPolicy(authDom, orgTrustorEntity, strconv.Quote(viewAction)),
 				),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("genesyscloud_auth_role."+roleResource2, "name", defaultRoleName),
@@ -84,17 +86,17 @@ func TestAccResourceAuthRoleBasic(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
-				Config: generateAuthRoleResource(
+				Config: GenerateAuthRoleResource(
 					roleResource1,
 					roleName1,
 					roleDesc1,
-					generateRolePermissions(strconv.Quote(perm1)),
-					generateRolePermPolicy(directoryDom, userEntity, strconv.Quote(addAction)),
+					GenerateRolePermissions(strconv.Quote(perm1)),
+					GenerateRolePermPolicy(directoryDom, userEntity, strconv.Quote(addAction)),
 				),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("genesyscloud_auth_role."+roleResource1, "name", roleName1),
@@ -105,13 +107,13 @@ func TestAccResourceAuthRoleBasic(t *testing.T) {
 			},
 			{
 				// Update
-				Config: generateAuthRoleResource(
+				Config: GenerateAuthRoleResource(
 					roleResource1,
 					roleName1,
 					roleDesc2,
-					generateRolePermissions(strconv.Quote(perm1), strconv.Quote(perm2)),
-					generateRolePermPolicy(directoryDom, userEntity, strconv.Quote(allAction)),
-					generateRolePermPolicy(directoryDom, groupEntity, strconv.Quote(addAction), strconv.Quote(editAction)),
+					GenerateRolePermissions(strconv.Quote(perm1), strconv.Quote(perm2)),
+					GenerateRolePermPolicy(directoryDom, userEntity, strconv.Quote(allAction)),
+					GenerateRolePermPolicy(directoryDom, groupEntity, strconv.Quote(addAction), strconv.Quote(editAction)),
 				),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("genesyscloud_auth_role."+roleResource1, "name", roleName1),
@@ -152,12 +154,12 @@ func TestAccResourceAuthRoleConditions(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create with a scalar condition
-				Config: generateAuthRoleResource(
+				Config: GenerateAuthRoleResource(
 					roleResource1,
 					roleName1,
 					roleDesc1,
@@ -188,8 +190,8 @@ func TestAccResourceAuthRoleConditions(t *testing.T) {
 			},
 			{
 				// Create a queue and update with a queue condition
-				Config: generateRoutingQueueResourceBasic(queueResource1, queueName1) +
-					generateAuthRoleResource(
+				Config: GenerateRoutingQueueResourceBasic(queueResource1, queueName1) +
+					GenerateAuthRoleResource(
 						roleResource1,
 						roleName1,
 						roleDesc1,
@@ -218,6 +220,108 @@ func TestAccResourceAuthRoleConditions(t *testing.T) {
 				),
 			},
 			{
+				// Queue condition without setting a queue_id
+				Config: GenerateAuthRoleResource(
+					roleResource1,
+					roleName1,
+					roleDesc1,
+					generateRolePermPolicyCondition(
+						qualityDom,
+						calibrationEntity,
+						addAction,
+						conjAnd,
+						generateRolePermPolicyCondTerm(
+							varNameQueue,
+							opEq,
+							fmt.Sprintf(`
+								operands {
+									type  = "%s"
+								}								
+								`, typeQueue),
+						),
+					),
+				),
+				Check: resource.ComposeTestCheckFunc(
+					validatePermPolicyCondition(
+						"genesyscloud_auth_role."+roleResource1,
+						qualityDom,
+						calibrationEntity,
+						conjAnd,
+						varNameQueue,
+						opEq,
+						typeQueue,
+						""),
+				),
+			},
+			{
+				// User condition without setting a user_id
+				Config: GenerateAuthRoleResource(
+					roleResource1,
+					roleName1,
+					roleDesc1,
+					generateRolePermPolicyCondition(
+						qualityDom,
+						calibrationEntity,
+						addAction,
+						conjAnd,
+						generateRolePermPolicyCondTerm(
+							varNameQueue,
+							opEq,
+							fmt.Sprintf(`
+							operands {
+								type  = "USER"
+							}								
+							`),
+						),
+					),
+				),
+				Check: resource.ComposeTestCheckFunc(
+					validatePermPolicyCondition(
+						"genesyscloud_auth_role."+roleResource1,
+						qualityDom,
+						calibrationEntity,
+						conjAnd,
+						varNameQueue,
+						opEq,
+						"USER",
+						""),
+				),
+			},
+			{
+				// VARIABLE condition without setting a value
+				Config: GenerateAuthRoleResource(
+					roleResource1,
+					roleName1,
+					roleDesc1,
+					generateRolePermPolicyCondition(
+						"analytics",
+						"userObservation",
+						"*",
+						conjAnd,
+						generateRolePermPolicyCondTerm(
+							varNameQueue,
+							opEq,
+							fmt.Sprintf(`
+							operands {
+								type  = "VARIABLE"
+							}
+							`),
+						),
+					),
+				),
+				Check: resource.ComposeTestCheckFunc(
+					validatePermPolicyCondition(
+						"genesyscloud_auth_role."+roleResource1,
+						"analytics",
+						"userObservation",
+						conjAnd,
+						varNameQueue,
+						opEq,
+						"VARIABLE",
+						""),
+				),
+			},
+			{
 				// Import/Read
 				ResourceName:      "genesyscloud_auth_role." + roleResource1,
 				ImportState:       true,
@@ -226,34 +330,6 @@ func TestAccResourceAuthRoleConditions(t *testing.T) {
 		},
 		CheckDestroy: testVerifyRolesDestroyed,
 	})
-}
-
-func generateAuthRoleResource(
-	resourceID string,
-	name string,
-	description string,
-	nestedBlocks ...string) string {
-	return fmt.Sprintf(`resource "genesyscloud_auth_role" "%s" {
-		name = "%s"
-		description = "%s"
-		%s
-	}
-	`, resourceID, name, description, strings.Join(nestedBlocks, "\n"))
-}
-
-func generateRolePermissions(permissions ...string) string {
-	return fmt.Sprintf(`
-		permissions = [%s]
-	`, strings.Join(permissions, ","))
-}
-
-func generateRolePermPolicy(domain string, entityName string, actions ...string) string {
-	return fmt.Sprintf(` permission_policies {
-		domain = "%s"
-		entity_name = "%s"
-		action_set = [%s]
-	}
-	`, domain, entityName, strings.Join(actions, ","))
 }
 
 func generateRolePermPolicyCondition(domain string, entityName string, action string, conj string, terms ...string) string {
@@ -300,10 +376,10 @@ func testVerifyRolesDestroyed(state *terraform.State) error {
 			continue
 		}
 
-		role, resp, err := authAPI.GetAuthorizationRole(rs.Primary.ID, nil)
+		role, resp, err := authAPI.GetAuthorizationRole(rs.Primary.ID, false, nil)
 		if role != nil {
 			return fmt.Errorf("Role (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Role not found as expected
 			continue
 		} else {
@@ -329,12 +405,12 @@ func validateRolePermissions(roleResourceName string, permissions ...string) res
 			configPerms[i] = roleResource.Primary.Attributes["permissions."+strconv.Itoa(i)]
 		}
 
-		extraPerms := sliceDifference(configPerms, permissions)
+		extraPerms := lists.SliceDifference(configPerms, permissions)
 		if len(extraPerms) > 0 {
 			return fmt.Errorf("Unexpected permissions found for role %s in state: %v", roleResource.Primary.ID, extraPerms)
 		}
 
-		missingPerms := sliceDifference(permissions, configPerms)
+		missingPerms := lists.SliceDifference(permissions, configPerms)
 		if len(missingPerms) > 0 {
 			return fmt.Errorf("Missing expected permissions for role %s in state: %v", roleResource.Primary.ID, missingPerms)
 		}
@@ -365,12 +441,12 @@ func validatePermissionPolicy(roleResourceName string, domain string, entityName
 					stateActions[j] = roleAttrs["permission_policies."+strconv.Itoa(i)+".action_set."+strconv.Itoa(j)]
 				}
 
-				extraActions := sliceDifference(stateActions, actionSet)
+				extraActions := lists.SliceDifference(stateActions, actionSet)
 				if len(extraActions) > 0 {
 					return fmt.Errorf("Unexpected permission actions found for role %s in state: %v", roleResource.Primary.ID, extraActions)
 				}
 
-				missingActions := sliceDifference(actionSet, stateActions)
+				missingActions := lists.SliceDifference(actionSet, stateActions)
 				if len(missingActions) > 0 {
 					return fmt.Errorf("Missing expected permission actions for role %s in state: %v", roleResource.Primary.ID, missingActions)
 				}
@@ -433,6 +509,11 @@ func validatePermPolicyCondition(
 				stateType := roleAttrs["permission_policies."+strNum+".conditions.0.terms.0.operands.0.type"]
 				if stateType != typeVar {
 					return fmt.Errorf("Invalid condition operand type in role %s: %v", roleResource.Primary.ID, stateType)
+				}
+
+				// Don't check value since the roles api allows the type to be set without setting a value
+				if value == "" {
+					return nil
 				}
 
 				if typeVar == "QUEUE" {

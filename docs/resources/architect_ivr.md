@@ -21,7 +21,7 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_architect_ivr" "test_ivr" {
+resource "genesyscloud_architect_ivr" "sample_ivr" {
   name                  = "Sample IVR"
   description           = "A sample IVR configuration"
   dnis                  = ["+13175550000", "+13175550001"]
@@ -37,13 +37,14 @@ resource "genesyscloud_architect_ivr" "test_ivr" {
 
 ### Required
 
-- `name` (String) Name of the IVR config.
+- `name` (String) Name of the IVR config. Note: If the name changes, the existing Genesys Cloud IVR config will be dropped and recreated with a new ID. This can cause an Architect Flow to become invalid if the old flow is reference in the flow.
 
 ### Optional
 
 - `closed_hours_flow_id` (String) ID of inbound call flow for closed hours.
 - `description` (String) IVR Config description.
-- `dnis` (Set of String) The phone number(s) to contact the IVR by.
+- `division_id` (String) Division ID.
+- `dnis` (Set of String) The phone number(s) to contact the IVR by. Each phone number in the array must be in an E.164 number format. (Note: An array with a length greater than 50 will be broken into chunks and uploaded in subsequent PUT requests.)
 - `holiday_hours_flow_id` (String) ID of inbound call flow for holidays.
 - `open_hours_flow_id` (String) ID of inbound call flow for open hours.
 - `schedule_group_id` (String) Schedule group ID.

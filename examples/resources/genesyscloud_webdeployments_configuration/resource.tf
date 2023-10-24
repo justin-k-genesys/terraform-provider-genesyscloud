@@ -8,6 +8,10 @@ resource "genesyscloud_webdeployments_configuration" "exampleConfiguration" {
     launcher_button {
       visibility = "OnDemand"
     }
+    home_screen {
+      enabled  = true
+      logo_url = "https://my-domain/images/my-logo.png"
+    }
     styles {
       primary_color = "#B0B0B0"
     }
@@ -21,6 +25,13 @@ resource "genesyscloud_webdeployments_configuration" "exampleConfiguration" {
         max_file_size_kb = 128
       }
     }
+  }
+  cobrowse {
+    enabled             = true
+    allow_agent_control = true
+    channels            = ["Webmessaging", "Voice"]
+    mask_selectors      = [".my-class", "#my-id"]
+    readonly_selectors  = [".my-class", "#my-id"]
   }
   journey_events {
     enabled                   = true

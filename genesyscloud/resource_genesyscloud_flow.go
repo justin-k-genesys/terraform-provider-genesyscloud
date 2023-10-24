@@ -1,25 +1,28 @@
 package genesyscloud
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	"terraform-provider-genesyscloud/genesyscloud/util/files"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func getAllFlows(ctx context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllFlows(ctx context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	architectAPI := platformclientv2.NewArchitectApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -34,171 +37,76 @@ func getAllFlows(ctx context.Context, clientConfig *platformclientv2.Configurati
 		}
 
 		for _, flow := range *flows.Entities {
-			resources[*flow.Id] = &ResourceMeta{Name: *flow.Name}
+			resources[*flow.Id] = &resourceExporter.ResourceMeta{Name: *flow.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func flowExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllFlows),
-		RefAttrs:         map[string]*RefAttrSettings{},
+func FlowExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllFlows),
+		RefAttrs:         map[string]*resourceExporter.RefAttrSettings{},
+		UnResolvableAttributes: map[string]*schema.Schema{
+			"filepath": ResourceFlow().Schema["filepath"],
+		},
+		CustomFlowResolver: map[string]*resourceExporter.CustomFlowResolver{
+			"file_content_hash": {ResolverFunc: resourceExporter.FileContentHashResolver},
+		},
 	}
 }
 
-func resourceFlow() *schema.Resource {
+func ResourceFlow() *schema.Resource {
 	return &schema.Resource{
 		Description: `Genesys Cloud Flow`,
 
-		CreateContext: createWithPooledClient(createFlow),
-		ReadContext:   readWithPooledClient(readFlow),
-		UpdateContext: updateWithPooledClient(updateFlow),
-		DeleteContext: deleteWithPooledClient(deleteFlow),
+		CreateContext: CreateWithPooledClient(createFlow),
+		UpdateContext: UpdateWithPooledClient(updateFlow),
+		ReadContext:   ReadWithPooledClient(readFlow),
+		DeleteContext: DeleteWithPooledClient(deleteFlow),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
 		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 			"filepath": {
-				Description:  "YAML file path or URL for flow configuration.",
+				Description:  "YAML file path for flow configuration. Note: Changing the flow name will result in the creation of a new flow with a new GUID, while the original flow will persist in your org.",
 				Type:         schema.TypeString,
 				Required:     true,
-				ValidateFunc: validatePath,
+				ValidateFunc: ValidatePath,
 			},
 			"file_content_hash": {
 				Description: "Hash value of the YAML file content. Used to detect changes.",
 				Type:        schema.TypeString,
-				Optional:    true,
-				Computed:    true,
+				Required:    true,
 			},
 			"substitutions": {
 				Description: "A substitution is a key value pair where the key is the value you want to replace, and the value is the value to substitute in its place.",
 				Type:        schema.TypeMap,
 				Optional:    true,
 			},
+			"force_unlock": {
+				Description: `Will perform a force unlock on an architect flow before beginning the publication process.  NOTE: The force unlock publishes the 'draft'
+				              architect flow and then publishes the flow named in this resource. This mirrors the behavior found in the archy CLI tool.`,
+				Type:     schema.TypeBool,
+				Optional: true,
+			},
 		},
 	}
 }
 
-func createFlow(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
-	architectAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
-
-	// TODO: After public API endpoint is published and exposed to public, change to SDK method instead of direct invocation
-	apiClient := &architectAPI.Configuration.APIClient
-	path := architectAPI.Configuration.BasePath + "/api/v2/flows/jobs"
-
-	headerParams := make(map[string]string)
-
-	// add default headers if any
-	for key := range architectAPI.Configuration.DefaultHeader {
-		headerParams[key] = architectAPI.Configuration.DefaultHeader[key]
-	}
-
-	headerParams["Authorization"] = "Bearer " + architectAPI.Configuration.AccessToken
-	headerParams["Content-Type"] = "application/json"
-	headerParams["Accept"] = "application/json"
-
-	successPayload := make(map[string]interface{})
-	response, err := apiClient.CallAPI(path, "POST", nil, headerParams, nil, nil, "", nil)
-	if err != nil {
-		return diag.Errorf("Failed to initiate archy job %s", err)
-	} else if err == nil && response.Error != nil {
-		return diag.Errorf("Failed to register Archy job. %s", err)
-	} else {
-		err = json.Unmarshal(response.RawBody, &successPayload)
-		if err != nil {
-			return diag.Errorf("Failed to unmarshal response after registering the Archy job. %s", err)
-		}
-	}
-
-	// Once the endpoint is ready for SDK, can extract data from the InitiateArchitectJobResponse type, instead of map of string interface
-	presignedUrl := successPayload["presignedUrl"].(string)
-	jobId := successPayload["id"].(string)
-	headers := successPayload["headers"].(map[string]interface{})
-
-	filePath := d.Get("filepath").(string)
-	substitutions := d.Get("substitutions").(map[string]interface{})
-
-	// Upload flow configuration file
-	_, err = prepareAndUploadFile(filePath, substitutions, headers, presignedUrl)
-	if err != nil {
-		return diag.Errorf(err.Error())
-	}
-
-	// Pre-define here before entering retry function, otherwise it will be overwritten
-	flowID := ""
-
-	// Retry every 15 seconds to fetch job status for 16 minutes until job succeeds or fails
-	retryErr := withRetries(ctx, 16*time.Minute, func() *resource.RetryError {
-		// TODO: After public API endpoint is published and exposed to public, change to SDK method instead of direct invocation
-		path := architectAPI.Configuration.BasePath + "/api/v2/flows/jobs/" + jobId + "?expand=messages"
-		res := make(map[string]interface{})
-		// If possible, after changing to SDK method invocation, include correlationId we get earlier in this function when making the GET request
-		response, err := apiClient.CallAPI(path, "GET", nil, headerParams, nil, nil, "", nil)
-		if err != nil {
-			// Nothing special to do here, but do avoid processing the response
-		} else if err == nil && response.Error != nil {
-			resource.NonRetryableError(fmt.Errorf("Error retrieving job status. JobID: %s, error: %s ", jobId, response.ErrorMessage))
-		} else {
-			err = json.Unmarshal(response.RawBody, &res)
-			if err != nil {
-				resource.NonRetryableError(fmt.Errorf("Unable to unmarshal response when retrieving job status. JobID: %s, error: %s ", jobId, response.ErrorMessage))
-			}
-		}
-		// Once SDK is ready, get status from ArchitectJobStateResponse type
-		if res["status"] == "Failure" {
-			return resource.NonRetryableError(fmt.Errorf("Flow publish failed. JobID: %s, tracing messages: %v ", jobId, res["messages"].([]interface{})))
-		}
-
-		// Once SDK is ready, get status from ArchitectJobStateResponse type
-		if res["status"] == "Success" {
-			// Once SDK is ready, get flow id from ArchitectJobStateResponse type
-			flowID = res["flow"].(map[string]interface{})["id"].(string)
-			return nil
-		}
-
-		time.Sleep(15 * time.Second) // Wait 15 seconds for next retry
-		return resource.RetryableError(fmt.Errorf("Job (%s) could not finish in 16 minutes and timed out ", jobId))
-	})
-
-	if retryErr != nil {
-		return retryErr
-	}
-
-	if flowID == "" {
-		return diag.Errorf("Failed to get the flowId from Architect Job (%s).", jobId)
-	}
-
-	d.Set("file_content_hash", hashFileContent(d.Get("filepath").(string)))
-	d.SetId(flowID)
-	log.Printf("Created flow %s.", d.Id())
-	return readFlow(ctx, d, meta)
-}
-
 func readFlow(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	architectAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
-	filePath := d.Get("filepath").(string)
-	if filePath != "" {
-		fileContentHash := hashFileContent(filePath)
-		if fileContentHash != d.Get("file_content_hash") {
-			d.Set("file_content_hash", fileContentHash)
-			log.Println("Detected change to config file, updating")
-			return updateFlow(ctx, d, meta)
-		}
-	}
-
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		flow, resp, err := architectAPI.GetFlow(d.Id(), false)
 		if err != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read flow %s: %s", d.Id(), err))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read flow %s: %s", d.Id(), err))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read flow %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read flow %s: %s", d.Id(), err))
 		}
 
 		log.Printf("Read flow %s %s", d.Id(), *flow.Name)
@@ -206,95 +114,118 @@ func readFlow(ctx context.Context, d *schema.ResourceData, meta interface{}) dia
 	})
 }
 
+func forceUnlockFlow(flowId string, sdkConfig *platformclientv2.Configuration) error {
+	log.Printf("Attempting to perform an unlock on flow: %s", flowId)
+	architectAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
+	_, _, err := architectAPI.PostFlowsActionsUnlock(flowId)
+
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func isForceUnlockEnabled(d *schema.ResourceData) bool {
+	forceUnlock := d.Get("force_unlock").(bool)
+	log.Printf("ForceUnlock: %v, id %v", forceUnlock, d.Id())
+
+	if forceUnlock && d.Id() != "" {
+		return true
+	}
+	return false
+}
+
+func createFlow(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
+	log.Printf("Creating flow")
+	return updateFlow(ctx, d, meta)
+}
+
 func updateFlow(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	architectAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
-	// TODO: After public API endpoint is published and exposed to public, change to SDK method instead of direct invocation
-	apiClient := &architectAPI.Configuration.APIClient
-	path := architectAPI.Configuration.BasePath + "/api/v2/flows/jobs"
+	log.Printf("Updating flow")
 
-	headerParams := make(map[string]string)
-
-	// add default headers if any
-	for key := range architectAPI.Configuration.DefaultHeader {
-		headerParams[key] = architectAPI.Configuration.DefaultHeader[key]
-	}
-
-	headerParams["Authorization"] = "Bearer " + architectAPI.Configuration.AccessToken
-	headerParams["Content-Type"] = "application/json"
-	headerParams["Accept"] = "application/json"
-
-	successPayload := make(map[string]interface{})
-	response, err := apiClient.CallAPI(path, "POST", nil, headerParams, nil, nil, "", nil)
-	if err != nil {
-		return diag.Errorf("Failed to update archy job %s", err)
-	} else if err == nil && response.Error != nil {
-		return diag.Errorf("Failed to register Archy job. %s", err)
-	} else {
-		err = json.Unmarshal([]byte(response.RawBody), &successPayload)
+	//Check to see if we need to force and unlock on an architect flow
+	if isForceUnlockEnabled(d) {
+		err := forceUnlockFlow(d.Id(), sdkConfig)
 		if err != nil {
-			return diag.Errorf("Failed to unmarshal response after registering the Archy job. %s", err)
+			setFileContentHashToNil(d)
+			return diag.Errorf("Failed to unlock targeted flow %s with error %s", d.Id(), err)
 		}
 	}
 
-	// Once the endpoint is ready for SDK, can extract data from the InitiateArchitectJobResponse type, instead of map of string interface
-	presignedUrl := successPayload["presignedUrl"].(string)
-	jobId := successPayload["id"].(string)
-	headers := successPayload["headers"].(map[string]interface{})
+	flowJob, response, err := architectAPI.PostFlowsJobs()
+
+	if err != nil {
+		setFileContentHashToNil(d)
+		return diag.Errorf("Failed to update job %s", err)
+	}
+
+	if err == nil && response.Error != nil {
+		setFileContentHashToNil(d)
+		return diag.Errorf("Failed to register job. %s", err)
+	}
+
+	presignedUrl := *flowJob.PresignedUrl
+	jobId := *flowJob.Id
+	headers := *flowJob.Headers
 
 	filePath := d.Get("filepath").(string)
 	substitutions := d.Get("substitutions").(map[string]interface{})
 
-	_, err = prepareAndUploadFile(filePath, substitutions, headers, presignedUrl)
+	reader, _, err := files.DownloadOrOpenFile(filePath)
 	if err != nil {
+		setFileContentHashToNil(d)
+		return diag.Errorf(err.Error())
+	}
+
+	s3Uploader := files.NewS3Uploader(reader, nil, substitutions, headers, "PUT", presignedUrl)
+	_, err = s3Uploader.Upload()
+	if err != nil {
+		setFileContentHashToNil(d)
 		return diag.Errorf(err.Error())
 	}
 
 	// Pre-define here before entering retry function, otherwise it will be overwritten
 	flowID := ""
 
-	retryErr := withRetries(ctx, 16*time.Minute, func() *resource.RetryError {
-		// TODO: After public API endpoint is published and exposed to public, change to SDK method instead of direct invocation
-		path := architectAPI.Configuration.BasePath + "/api/v2/flows/jobs/" + jobId + "?expand=messages"
-		res := make(map[string]interface{})
-		// If possible, after changing to SDK method invocation, include correlationId we get earlier in this function when making the GET request
-		response, err := apiClient.CallAPI(path, "GET", nil, headerParams, nil, nil, "", nil)
+	retryErr := WithRetries(ctx, 16*time.Minute, func() *retry.RetryError {
+		flowJob, response, err := architectAPI.GetFlowsJob(jobId, []string{"messages"})
 		if err != nil {
-			// Nothing special to do here, but do avoid processing the response
-		} else if err == nil && response.Error != nil {
-			resource.NonRetryableError(fmt.Errorf("Error retrieving job status. JobID: %s, error: %s ", jobId, response.ErrorMessage))
-		} else {
-			err = json.Unmarshal(response.RawBody, &res)
-			if err != nil {
-				resource.NonRetryableError(fmt.Errorf("Unable to unmarshal response when retrieving job status. JobID: %s, error: %s ", jobId, response.ErrorMessage))
-			}
-		}
-		// Once SDK is ready, get status from ArchitectJobStateResponse type
-		if res["status"] == "Failure" {
-			return resource.NonRetryableError(fmt.Errorf("Flow publish failed. JobID: %s, tracing messages: %v ", jobId, res["messages"].([]interface{})))
+			return retry.NonRetryableError(fmt.Errorf("Error retrieving job status. JobID: %s, error: %s ", jobId, response.ErrorMessage))
 		}
 
-		// Once SDK is ready, get status from ArchitectJobStateResponse type
-		if res["status"] == "Success" {
-			// Once SDK is ready, get flow id from ArchitectJobStateResponse type
-			flowID = res["flow"].(map[string]interface{})["id"].(string)
+		if *flowJob.Status == "Failure" {
+			if flowJob.Messages == nil {
+				return retry.NonRetryableError(fmt.Errorf("Flow publish failed. JobID: %s, no tracing messages available.", jobId))
+			}
+			messages := make([]string, 0)
+			for _, m := range *flowJob.Messages {
+				messages = append(messages, *m.Text)
+			}
+			return retry.NonRetryableError(fmt.Errorf("Flow publish failed. JobID: %s, tracing messages: %v ", jobId, strings.Join(messages, "\n\n")))
+		}
+
+		if *flowJob.Status == "Success" {
+			flowID = *flowJob.Flow.Id
 			return nil
 		}
 
 		time.Sleep(15 * time.Second) // Wait 15 seconds for next retry
-		return resource.RetryableError(fmt.Errorf("Job (%s) could not finish in 16 minutes and timed out ", jobId))
+		return retry.RetryableError(fmt.Errorf("Job (%s) could not finish in 16 minutes and timed out ", jobId))
 	})
 
 	if retryErr != nil {
+		setFileContentHashToNil(d)
 		return retryErr
 	}
 
 	if flowID == "" {
+		setFileContentHashToNil(d)
 		return diag.Errorf("Failed to get the flowId from Architect Job (%s).", jobId)
 	}
 
-	d.Set("file_content_hash", hashFileContent(d.Get("filepath").(string)))
 	d.SetId(flowID)
 
 	log.Printf("Updated flow %s. ", d.Id())
@@ -302,72 +233,66 @@ func updateFlow(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 }
 
 func deleteFlow(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	architectAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	//Check to see if we need to force
+	if isForceUnlockEnabled(d) {
+		err := forceUnlockFlow(d.Id(), sdkConfig)
+		if err != nil {
+			return diag.Errorf("Failed to unlock targeted flow %s with error %s", d.Id(), err)
+		}
+	}
+
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		resp, err := architectAPI.DeleteFlow(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// Flow deleted
 				log.Printf("Deleted Flow %s", d.Id())
 				return nil
 			}
 			if resp.StatusCode == http.StatusConflict {
-				return resource.RetryableError(fmt.Errorf("Error deleting flow %s: %s", d.Id(), err))
+				return retry.RetryableError(fmt.Errorf("Error deleting flow %s: %s", d.Id(), err))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting flow %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting flow %s: %s", d.Id(), err))
 		}
 		return nil
 	})
 }
 
-// Read and upload input file path to S3 pre-signed URL
-func prepareAndUploadFile(filename string, substitutions map[string]interface{}, headers map[string]interface{}, presignedUrl string) ([]byte, error) {
-	bodyBuf := &bytes.Buffer{}
+func GenerateFlowResource(resourceID, srcFile, filecontent string, force_unlock bool, substitutions ...string) string {
+	fullyQualifiedPath, _ := filepath.Abs(srcFile)
 
-	reader, file, err := downloadOrOpenFile(filename)
+	if filecontent != "" {
+		updateFile(srcFile, filecontent)
+	}
+
+	flowResourceStr := fmt.Sprintf(`resource "genesyscloud_flow" "%s" {
+        filepath = %s
+		file_content_hash =  filesha256(%s)
+		force_unlock = %v
+		%s
+	}
+	`, resourceID, strconv.Quote(srcFile), strconv.Quote(fullyQualifiedPath), force_unlock, strings.Join(substitutions, "\n"))
+
+	return flowResourceStr
+}
+
+func updateFile(filepath, content string) {
+	file, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0666)
+
 	if err != nil {
-		return nil, err
+		log.Println(err)
+		return
 	}
-	if file != nil {
-		defer file.Close()
-	}
+	defer file.Close()
 
-	_, err = io.Copy(bodyBuf, reader)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to copy file content to the handler. Error: %s ", err)
-	}
+	file.WriteString(content)
+}
 
-	if len(substitutions) > 0 {
-		fileContents := bodyBuf.String()
-		for k, v := range substitutions {
-			fileContents = strings.Replace(fileContents, fmt.Sprintf("{{%s}}", k), v.(string), -1)
-		}
-		bodyBuf.Reset()
-		bodyBuf.WriteString(fileContents)
-	}
-
-	req, _ := http.NewRequest("PUT", presignedUrl, bodyBuf)
-	for key, value := range headers {
-		req.Header.Set(key, value.(string))
-	}
-
-	client := &http.Client{}
-
-	resp, err := client.Do(req)
-	if resp != nil && resp.Body != nil {
-		defer resp.Body.Close()
-	}
-
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Failed to upload flow configuration file to S3 bucket. Error: %s ", err)
-	}
-
-	response, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("Failed to read response body when uploading flow configuration file. %s", err)
-	}
-
-	return response, nil
+// setFileContentHashToNil This operation is required after a flow update fails because we want Terraform to detect changes
+// in the file content hash and re-attempt an update, should the user re-run terraform apply without making changes to the file contents
+func setFileContentHashToNil(d *schema.ResourceData) {
+	_ = d.Set("file_content_hash", nil)
 }

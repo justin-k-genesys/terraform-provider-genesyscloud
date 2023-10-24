@@ -6,21 +6,26 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func resourceEdgeGroup() *schema.Resource {
+func ResourceEdgeGroup() *schema.Resource {
 	return &schema.Resource{
-		Description: "Genesys Cloud Edge Group",
+		Description: `Genesys Cloud Edge Group. NOTE: This resource is being kept here for backwards compatibility with older Genesys Cloud Organization. You may get an error if you try to create an edge group with a Genesys Cloud Organization created in 2022 or later.`,
 
-		CreateContext: createWithPooledClient(createEdgeGroup),
-		ReadContext:   readWithPooledClient(readEdgeGroup),
-		UpdateContext: updateWithPooledClient(updateEdgeGroup),
-		DeleteContext: deleteWithPooledClient(deleteEdgeGroup),
+		CreateContext: CreateWithPooledClient(createEdgeGroup),
+		ReadContext:   ReadWithPooledClient(readEdgeGroup),
+		UpdateContext: UpdateWithPooledClient(updateEdgeGroup),
+		DeleteContext: DeleteWithPooledClient(deleteEdgeGroup),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -81,10 +86,10 @@ func createEdgeGroup(ctx context.Context, d *schema.ResourceData, meta interface
 		edgeGroup.Description = &description
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
-	diagErr := retryWhen(isStatus400, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsStatus400, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		log.Printf("Creating edge group %s", name)
 		edgeGroup, resp, err := edgesAPI.PostTelephonyProvidersEdgesEdgegroups(*edgeGroup)
 		if err != nil {
@@ -122,13 +127,13 @@ func updateEdgeGroup(ctx context.Context, d *schema.ResourceData, meta interface
 		edgeGroup.Description = &description
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
-	diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		edgeGroupFromApi, resp, getErr := edgesAPI.GetTelephonyProvidersEdgesEdgegroup(d.Id(), nil)
 		if getErr != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				return resp, diag.Errorf("The edge group does not exist %s: %s", d.Id(), getErr)
 			}
 			return resp, diag.Errorf("Failed to read edge group %s: %s", d.Id(), getErr)
@@ -151,7 +156,7 @@ func updateEdgeGroup(ctx context.Context, d *schema.ResourceData, meta interface
 }
 
 func deleteEdgeGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting edge group")
@@ -160,15 +165,15 @@ func deleteEdgeGroup(ctx context.Context, d *schema.ResourceData, meta interface
 		return diag.Errorf("Failed to delete edge group: %s", err)
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		edgeGroup, resp, err := edgesAPI.GetTelephonyProvidersEdgesEdgegroup(d.Id(), nil)
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// Edge group deleted
 				log.Printf("Deleted Edge group %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting Edge group %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting Edge group %s: %s", d.Id(), err))
 		}
 
 		if edgeGroup.State != nil && *edgeGroup.State == "deleted" {
@@ -177,25 +182,25 @@ func deleteEdgeGroup(ctx context.Context, d *schema.ResourceData, meta interface
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("Edge group %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Edge group %s still exists", d.Id()))
 	})
 }
 
 func readEdgeGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	log.Printf("Reading edge group %s", d.Id())
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		edgeGroup, resp, getErr := edgesAPI.GetTelephonyProvidersEdgesEdgegroup(d.Id(), nil)
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read edge group %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read edge group %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read edge group %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read edge group %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceEdgeGroup())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceEdgeGroup())
 		d.Set("name", *edgeGroup.Name)
 		d.Set("state", *edgeGroup.State)
 		if edgeGroup.Description != nil {
@@ -226,8 +231,8 @@ func flattenPhoneTrunkBases(trunkBases []platformclientv2.Trunkbase) *schema.Set
 	return schema.NewSet(schema.HashString, interfaceList)
 }
 
-func getAllEdgeGroups(_ context.Context, sdkConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllEdgeGroups(_ context.Context, sdkConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
@@ -244,7 +249,7 @@ func getAllEdgeGroups(_ context.Context, sdkConfig *platformclientv2.Configurati
 
 		for _, edgeGroup := range *edgeGroups.Entities {
 			if edgeGroup.State != nil && *edgeGroup.State != "deleted" {
-				resources[*edgeGroup.Id] = &ResourceMeta{Name: *edgeGroup.Name}
+				resources[*edgeGroup.Id] = &resourceExporter.ResourceMeta{Name: *edgeGroup.Name}
 			}
 		}
 	}
@@ -262,7 +267,7 @@ func getAllEdgeGroups(_ context.Context, sdkConfig *platformclientv2.Configurati
 
 		for _, edgeGroup := range *edgeGroups.Entities {
 			if edgeGroup.State != nil && *edgeGroup.State != "deleted" {
-				resources[*edgeGroup.Id] = &ResourceMeta{Name: *edgeGroup.Name}
+				resources[*edgeGroup.Id] = &resourceExporter.ResourceMeta{Name: *edgeGroup.Name}
 			}
 		}
 	}
@@ -270,10 +275,10 @@ func getAllEdgeGroups(_ context.Context, sdkConfig *platformclientv2.Configurati
 	return resources, nil
 }
 
-func edgeGroupExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllEdgeGroups),
-		RefAttrs: map[string]*RefAttrSettings{
+func EdgeGroupExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllEdgeGroups),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"phone_trunk_base_ids": {RefType: "genesyscloud_telephony_providers_edges_trunkbasesettings"},
 		},
 	}
@@ -283,7 +288,7 @@ func buildSdkTrunkBases(d *schema.ResourceData) *[]platformclientv2.Trunkbase {
 	returnValue := make([]platformclientv2.Trunkbase, 0)
 
 	if ids, ok := d.GetOk("phone_trunk_base_ids"); ok {
-		phoneTrunkBaseIds := setToStringList(ids.(*schema.Set))
+		phoneTrunkBaseIds := lists.SetToStringList(ids.(*schema.Set))
 		for _, trunkBaseId := range *phoneTrunkBaseIds {
 			id := trunkBaseId
 			returnValue = append(returnValue, platformclientv2.Trunkbase{

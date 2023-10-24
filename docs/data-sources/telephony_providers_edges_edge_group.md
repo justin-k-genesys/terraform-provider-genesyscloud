@@ -14,7 +14,7 @@ Data source for Genesys Cloud Edge Group. Select an edge group by name
 
 ```terraform
 data "genesyscloud_telephony_providers_edges_edge_group" "edgeGroup" {
-  name = "test edge group name"
+  name = "example edge group name"
 }
 ```
 
@@ -25,8 +25,10 @@ data "genesyscloud_telephony_providers_edges_edge_group" "edgeGroup" {
 
 - `name` (String) Edge Group name.
 
+### Optional
+
+- `managed` (Boolean) Return entities that are managed by Genesys Cloud. Defaults to `false`.
+
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-
-

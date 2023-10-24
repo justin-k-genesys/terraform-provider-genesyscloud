@@ -27,15 +27,15 @@ func TestAccDataSourceWidgetDeployment(t *testing.T) {
 		authenticationUrl:      "https://localhost",
 	}
 
-	err := authorizeSdk()
+	_, err := AuthorizeSdk()
 	if err != nil {
 		t.Fatal(err)
 	}
 	deleteWidgetDeploymentWithName(widgetDeploymentsName)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				Config: generateWidgetDeployV1(widgetDeployV1) + generateWidgetDeploymentDataSource(widgetDeploymentsDataSource, "genesyscloud_widget_deployment."+widgegetDeploymentsResource+".name", "genesyscloud_widget_deployment."+widgegetDeploymentsResource),

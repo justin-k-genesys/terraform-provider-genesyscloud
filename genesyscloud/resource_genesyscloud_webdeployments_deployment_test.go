@@ -10,7 +10,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceWebDeploymentsDeployment(t *testing.T) {
@@ -22,8 +22,8 @@ func TestAccResourceWebDeploymentsDeployment(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				Config: basicDeploymentResource(deploymentName, deploymentDescription),
@@ -56,8 +56,8 @@ func TestAccResourceWebDeploymentsDeployment_AllowedDomains(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				Config: deploymentResourceWithAllowedDomains(t, deploymentName, firstDomain),
@@ -98,8 +98,8 @@ func TestAccResourceWebDeploymentsDeployment_Versioning(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				Config: versioningDeploymentResource(t, deploymentName, "description 1", "en-us", []string{"en-us"}),
@@ -131,9 +131,12 @@ func TestAccResourceWebDeploymentsDeployment_Versioning(t *testing.T) {
 }
 
 func basicDeploymentResource(name, description string) string {
+	minimalConfigName := "Minimal Config " + uuid.NewString()
 	return fmt.Sprintf(`
 	resource "genesyscloud_webdeployments_configuration" "minimal" {
-		name = "Minimal Config"
+		name             = "%s"
+		languages        = ["en-us"]
+		default_language = "en-us"
 	}
 
 	resource "genesyscloud_webdeployments_deployment" "basic" {
@@ -145,7 +148,7 @@ func basicDeploymentResource(name, description string) string {
 			version = "${genesyscloud_webdeployments_configuration.minimal.version}"
 		}
 	}
-	`, name, description)
+	`, minimalConfigName, name, description)
 }
 
 func deploymentResourceWithAllowedDomains(t *testing.T, name string, allowedDomains ...string) string {
@@ -157,7 +160,9 @@ func deploymentResourceWithAllowedDomains(t *testing.T, name string, allowedDoma
 
 	return fmt.Sprintf(`
 	resource "genesyscloud_webdeployments_configuration" "minimal" {
-		name = "%s"
+		name             = "%s"
+		languages        = ["en-us"]
+		default_language = "en-us"
 	}
 
 	resource "genesyscloud_webdeployments_deployment" "basicWithAllowedDomains" {
@@ -205,9 +210,9 @@ func verifyDeploymentDestroyed(state *terraform.State) error {
 			continue
 		}
 
-		_, response, err := api.GetWebdeploymentsDeployment(rs.Primary.ID)
+		_, response, err := api.GetWebdeploymentsDeployment(rs.Primary.ID, []string{})
 
-		if isStatus404(response) {
+		if IsStatus404(response) {
 			continue
 		}
 

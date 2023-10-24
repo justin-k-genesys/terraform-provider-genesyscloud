@@ -5,18 +5,21 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func init() {
 	// Set descriptions to support markdown syntax, this will be used in document generation
 	// and the language server.
+	// providerResources = make(map[string]*schema.Resource)
+	// providerDataSources = make(map[string]*schema.Resource)
 	schema.DescriptionKind = schema.StringMarkdown
 
 	// Customize the content of descriptions when output.
@@ -27,22 +30,45 @@ func init() {
 		}
 		return strings.TrimSpace(desc)
 	}
+
 }
 
 // New initializes the provider schema
-func New(version string) func() *schema.Provider {
+func New(version string, providerResources map[string]*schema.Resource, providerDataSources map[string]*schema.Resource) func() *schema.Provider {
 	return func() *schema.Provider {
+
+		/*
+		   The next two lines are important.  We have to make sure the Terraform provider has their own deep copies of the resource
+		   and data source maps.  If you do not do a deep copy and try to pass in the original maps, you open yourself up to race conditions
+		   because they map are being read and written to concurrently.
+		*/
+		copiedResources := make(map[string]*schema.Resource)
+		for k, v := range providerResources {
+			copiedResources[k] = v
+		}
+
+		copiedDataSources := make(map[string]*schema.Resource)
+		for k, v := range providerDataSources {
+			copiedDataSources[k] = v
+		}
+
 		return &schema.Provider{
 			Schema: map[string]*schema.Schema{
+				"access_token": {
+					Type:        schema.TypeString,
+					Optional:    true,
+					DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_ACCESS_TOKEN", nil),
+					Description: "A string that the OAuth client uses to make requests. Can be set with the `GENESYSCLOUD_ACCESS_TOKEN` environment variable.",
+				},
 				"oauthclient_id": {
 					Type:        schema.TypeString,
-					Required:    true,
+					Optional:    true,
 					DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_OAUTHCLIENT_ID", nil),
 					Description: "OAuthClient ID found on the OAuth page of Admin UI. Can be set with the `GENESYSCLOUD_OAUTHCLIENT_ID` environment variable.",
 				},
 				"oauthclient_secret": {
 					Type:        schema.TypeString,
-					Required:    true,
+					Optional:    true,
 					DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_OAUTHCLIENT_SECRET", nil),
 					Description: "OAuthClient secret found on the OAuth page of Admin UI. Can be set with the `GENESYSCLOUD_OAUTHCLIENT_SECRET` environment variable.",
 					Sensitive:   true,
@@ -67,104 +93,63 @@ func New(version string) func() *schema.Provider {
 					Description:  "Max number of OAuth tokens in the token pool. Can be set with the `GENESYSCLOUD_TOKEN_POOL_SIZE` environment variable.",
 					ValidateFunc: validation.IntBetween(1, 20),
 				},
+				"proxy": {
+					Type:     schema.TypeSet,
+					Optional: true,
+					MaxItems: 1,
+					Elem: &schema.Resource{
+						Schema: map[string]*schema.Schema{
+							"port": {
+								Type:        schema.TypeString,
+								Optional:    true,
+								DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_PROXY_PORT", nil),
+								Description: "Port for the proxy can be set with the `GENESYSCLOUD_PROXY_PORT` environment variable.",
+							},
+							"host": {
+								Type:        schema.TypeString,
+								Optional:    true,
+								DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_PROXY_HOST", nil),
+								Description: "Host for the proxy can be set with the `GENESYSCLOUD_PROXY_HOST` environment variable.",
+							},
+							"protocol": {
+								Type:        schema.TypeString,
+								Optional:    true,
+								DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_PROXY_PROTOCOL", nil),
+								Description: "Protocol for the proxy can be set with the `GENESYSCLOUD_PROXY_PROTOCOL` environment variable.",
+							},
+							"auth": {
+								Type:     schema.TypeSet,
+								Optional: true,
+								MaxItems: 1,
+								Elem: &schema.Resource{
+									Schema: map[string]*schema.Schema{
+										"username": {
+											Type:        schema.TypeString,
+											Optional:    true,
+											DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_PROXY_AUTH_USERNAME", nil),
+											Description: "UserName for the Auth can be set with the `GENESYSCLOUD_PROXY_AUTH_USERNAME` environment variable.",
+										},
+										"password": {
+											Type:        schema.TypeString,
+											Optional:    true,
+											DefaultFunc: schema.EnvDefaultFunc("GENESYSCLOUD_PROXY_AUTH_PASSWORD", nil),
+											Description: "Password for the Auth can be set with the `GENESYSCLOUD_PROXY_AUTH_PASSWORD` environment variable.",
+										},
+									},
+								},
+							},
+						},
+					},
+				},
 			},
-			ResourcesMap: map[string]*schema.Resource{
-				"genesyscloud_architect_datatable":                         resourceArchitectDatatable(),
-				"genesyscloud_architect_datatable_row":                     resourceArchitectDatatableRow(),
-				"genesyscloud_architect_emergencygroup":                    resourceArchitectEmergencyGroup(),
-				"genesyscloud_flow":                                        resourceFlow(),
-				"genesyscloud_architect_ivr":                               resourceArchitectIvrConfig(),
-				"genesyscloud_architect_schedules":                         resourceArchitectSchedules(),
-				"genesyscloud_architect_schedulegroups":                    resourceArchitectScheduleGroups(),
-				"genesyscloud_architect_user_prompt":                       resourceArchitectUserPrompt(),
-				"genesyscloud_auth_role":                                   resourceAuthRole(),
-				"genesyscloud_auth_division":                               resourceAuthDivision(),
-				"genesyscloud_group":                                       resourceGroup(),
-				"genesyscloud_group_roles":                                 resourceGroupRoles(),
-				"genesyscloud_idp_adfs":                                    resourceIdpAdfs(),
-				"genesyscloud_idp_generic":                                 resourceIdpGeneric(),
-				"genesyscloud_idp_gsuite":                                  resourceIdpGsuite(),
-				"genesyscloud_idp_okta":                                    resourceIdpOkta(),
-				"genesyscloud_idp_onelogin":                                resourceIdpOnelogin(),
-				"genesyscloud_idp_ping":                                    resourceIdpPing(),
-				"genesyscloud_idp_salesforce":                              resourceIdpSalesforce(),
-				"genesyscloud_integration":                                 resourceIntegration(),
-				"genesyscloud_integration_action":                          resourceIntegrationAction(),
-				"genesyscloud_integration_credential":                      resourceCredential(),
-				"genesyscloud_location":                                    resourceLocation(),
-				"genesyscloud_oauth_client":                                resourceOAuthClient(),
-				"genesyscloud_processautomation_trigger":                   resourceProcessAutomationTrigger(),
-				"genesyscloud_quality_forms_evaluation":                    resourceEvaluationForm(),
-				"genesyscloud_routing_email_domain":                        resourceRoutingEmailDomain(),
-				"genesyscloud_routing_email_route":                         resourceRoutingEmailRoute(),
-				"genesyscloud_routing_language":                            resourceRoutingLanguage(),
-				"genesyscloud_routing_queue":                               resourceRoutingQueue(),
-				"genesyscloud_routing_skill":                               resourceRoutingSkill(),
-				"genesyscloud_routing_utilization":                         resourceRoutingUtilization(),
-				"genesyscloud_routing_wrapupcode":                          resourceRoutingWrapupCode(),
-				"genesyscloud_telephony_providers_edges_did_pool":          resourceTelephonyDidPool(),
-				"genesyscloud_telephony_providers_edges_edge_group":        resourceEdgeGroup(),
-				"genesyscloud_telephony_providers_edges_extension_pool":    resourceTelephonyExtensionPool(),
-				"genesyscloud_telephony_providers_edges_phone":             resourcePhone(),
-				"genesyscloud_telephony_providers_edges_site":              resourceSite(),
-				"genesyscloud_telephony_providers_edges_phonebasesettings": resourcePhoneBaseSettings(),
-				"genesyscloud_telephony_providers_edges_trunkbasesettings": resourceTrunkBaseSettings(),
-				"genesyscloud_telephony_providers_edges_trunk":             resourceTrunk(),
-				"genesyscloud_tf_export":                                   resourceTfExport(),
-				"genesyscloud_user":                                        resourceUser(),
-				"genesyscloud_user_roles":                                  resourceUserRoles(),
-				"genesyscloud_webdeployments_configuration":                resourceWebDeploymentConfiguration(),
-				"genesyscloud_webdeployments_deployment":                   resourceWebDeployment(),
-				"genesyscloud_widget_deployment":                           resourceWidgetDeployment(),
-			},
-			DataSourcesMap: map[string]*schema.Resource{
-				"genesyscloud_architect_datatable":                         dataSourceArchitectDatatable(),
-				"genesyscloud_architect_ivr":                               dataSourceArchitectIvr(),
-				"genesyscloud_architect_emergencygroup":                    dataSourceArchitectEmergencyGroup(),
-				"genesyscloud_architect_schedules":                         dataSourceSchedule(),
-				"genesyscloud_architect_schedulegroups":                    dataSourceArchitectScheduleGroups(),
-				"genesyscloud_architect_user_prompt":                       dataSourceUserPrompt(),
-				"genesyscloud_auth_role":                                   dataSourceAuthRole(),
-				"genesyscloud_auth_division":                               dataSourceAuthDivision(),
-				"genesyscloud_auth_division_home":                          dataSourceAuthDivisionHome(),
-				"genesyscloud_flow":                                        dataSourceFlow(),
-				"genesyscloud_group":                                       dataSourceGroup(),
-				"genesyscloud_integration":                                 dataSourceIntegration(),
-				"genesyscloud_integration_action":                          dataSourceIntegrationAction(),
-				"genesyscloud_integration_credential":                      dataSourceIntegrationCredential(),
-				"genesyscloud_location":                                    dataSourceLocation(),
-				"genesyscloud_oauth_client":                                dataSourceOAuthClient(),
-				"genesyscloud_processautomation_trigger":                   dataSourceProcessAutomationTrigger(),
-				"genesyscloud_organizations_me":                            dataSourceOrganizationsMe(),
-				"genesyscloud_quality_forms_evaluation":                    dataSourceQualityFormsEvaluations(),
-				"genesyscloud_routing_language":                            dataSourceRoutingLanguage(),
-				"genesyscloud_routing_queue":                               dataSourceRoutingQueue(),
-				"genesyscloud_routing_skill":                               dataSourceRoutingSkill(),
-				"genesyscloud_routing_email_domain":                        dataSourceRoutingEmailDomain(),
-				"genesyscloud_routing_wrapupcode":                          dataSourceRoutingWrapupcode(),
-				"genesyscloud_script":                                      dataSourceScript(),
-				"genesyscloud_station":                                     dataSourceStation(),
-				"genesyscloud_user":                                        dataSourceUser(),
-				"genesyscloud_telephony_providers_edges_did":               dataSourceDid(),
-				"genesyscloud_telephony_providers_edges_did_pool":          dataSourceDidPool(),
-				"genesyscloud_telephony_providers_edges_edge_group":        dataSourceEdgeGroup(),
-				"genesyscloud_telephony_providers_edges_extension_pool":    dataSourceExtensionPool(),
-				"genesyscloud_telephony_providers_edges_site":              dataSourceSite(),
-				"genesyscloud_telephony_providers_edges_linebasesettings":  dataSourceLineBaseSettings(),
-				"genesyscloud_telephony_providers_edges_phone":             dataSourcePhone(),
-				"genesyscloud_telephony_providers_edges_phonebasesettings": dataSourcePhoneBaseSettings(),
-				"genesyscloud_telephony_providers_edges_trunk":             dataSourceTrunk(),
-				"genesyscloud_telephony_providers_edges_trunkbasesettings": dataSourceTrunkBaseSettings(),
-				"genesyscloud_webdeployments_configuration":                dataSourceWebDeploymentsConfiguration(),
-				"genesyscloud_webdeployments_deployment":                   dataSourceWebDeploymentsDeployment(),
-				"genesyscloud_widget_deployment":                           dataSourceWidgetDeployments(),
-			},
+			ResourcesMap:         copiedResources,
+			DataSourcesMap:       copiedDataSources,
 			ConfigureContextFunc: configure(version),
 		}
 	}
 }
 
-type providerMeta struct {
+type ProviderMeta struct {
 	Version      string
 	ClientConfig *platformclientv2.Configuration
 	Domain       string
@@ -172,12 +157,26 @@ type providerMeta struct {
 
 func configure(version string) schema.ConfigureContextFunc {
 	return func(context context.Context, data *schema.ResourceData) (interface{}, diag.Diagnostics) {
-		// Initialize the SDK Client pool
-		err := InitSDKClientPool(data.Get("token_pool_size").(int), version, data)
-		if err != nil {
-			return nil, err
+		// Initialize a single client if we have an access token
+		accessToken := data.Get("access_token").(string)
+		if accessToken != "" {
+			once.Do(func() {
+				sdkConfig := platformclientv2.GetDefaultConfiguration()
+				_ = initClientConfig(data, version, sdkConfig)
+
+				sdkClientPool = &SDKClientPool{
+					pool: make(chan *platformclientv2.Configuration, 1),
+				}
+				sdkClientPool.pool <- sdkConfig
+			})
+		} else {
+			// Initialize the SDK Client pool
+			err := InitSDKClientPool(data.Get("token_pool_size").(int), version, data)
+			if err != nil {
+				return nil, err
+			}
 		}
-		return &providerMeta{
+		return &ProviderMeta{
 			Version:      version,
 			ClientConfig: platformclientv2.GetDefaultConfiguration(),
 			Domain:       getRegionDomain(data.Get("aws_region").(string)),
@@ -217,14 +216,15 @@ func getRegionDomain(region string) string {
 	return getRegionMap()[strings.ToLower(region)]
 }
 
-func getRegionBasePath(region string) string {
+func GetRegionBasePath(region string) string {
 	return "https://api." + getRegionDomain(region)
 }
 
 func initClientConfig(data *schema.ResourceData, version string, config *platformclientv2.Configuration) diag.Diagnostics {
+	accessToken := data.Get("access_token").(string)
 	oauthclientID := data.Get("oauthclient_id").(string)
 	oauthclientSecret := data.Get("oauthclient_secret").(string)
-	basePath := getRegionBasePath(data.Get("aws_region").(string))
+	basePath := GetRegionBasePath(data.Get("aws_region").(string))
 
 	config.BasePath = basePath
 	if data.Get("sdk_debug").(bool) {
@@ -237,6 +237,37 @@ func initClientConfig(data *schema.ResourceData, version string, config *platfor
 		config.LoggingConfiguration.SetLogFormat(platformclientv2.Text)
 		config.LoggingConfiguration.SetLogFilePath("sdk_debug.log")
 	}
+
+	proxySet := data.Get("proxy").(*schema.Set)
+	for _, proxyObj := range proxySet.List() {
+		proxy := proxyObj.(map[string]interface{})
+
+		// Retrieve the values of the `host`, `port`, and `protocol` attributes
+		host := proxy["host"].(string)
+		port := proxy["port"].(string)
+		protocol := proxy["protocol"].(string)
+
+		config.ProxyConfiguration = &platformclientv2.ProxyConfiguration{}
+
+		config.ProxyConfiguration.Host = host
+		config.ProxyConfiguration.Port = port
+		config.ProxyConfiguration.Protocol = protocol
+
+		authSet := proxy["auth"].(*schema.Set)
+		authList := authSet.List()
+
+		for _, authElement := range authList {
+			auth := authElement.(map[string]interface{})
+			username := auth["username"].(string)
+			password := auth["password"].(string)
+			config.ProxyConfiguration.Auth = &platformclientv2.Auth{}
+
+			config.ProxyConfiguration.Auth.UserName = username
+			config.ProxyConfiguration.Auth.Password = password
+		}
+
+	}
+
 	config.AddDefaultHeader("User-Agent", "GC Terraform Provider/"+version)
 	config.RetryConfiguration = &platformclientv2.RetryConfiguration{
 		RetryWaitMin: time.Second * 1,
@@ -244,15 +275,40 @@ func initClientConfig(data *schema.ResourceData, version string, config *platfor
 		RetryMax:     20,
 		RequestLogHook: func(request *http.Request, count int) {
 			if count > 0 && request != nil {
-				log.Printf("Retry #%d for %s %s%s", count, request.Method, request.Host, request.RequestURI)
+				log.Printf("Retry #%d for %s %s", count, request.Method, request.URL)
+			}
+		},
+		ResponseLogHook: func(response *http.Response) {
+			if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+				log.Printf("Response %s for request:%s %s", response.Status, response.Request.Method, response.Request.URL)
 			}
 		},
 	}
 
-	err := config.AuthorizeClientCredentials(oauthclientID, oauthclientSecret)
-	if err != nil {
-		return diag.Errorf("Failed to authorize Genesys Cloud client credentials: %v", err)
+	if accessToken != "" {
+		log.Print("Setting access token set on configuration instance.")
+		config.AccessToken = accessToken
+	} else {
+		err := config.AuthorizeClientCredentials(oauthclientID, oauthclientSecret)
+		if err != nil {
+			return diag.Errorf("Failed to authorize Genesys Cloud client credentials: %v", err)
+		}
 	}
+
 	log.Printf("Initialized Go SDK Client. Debug=%t", data.Get("sdk_debug").(bool))
 	return nil
+}
+
+func AuthorizeSdk() (*platformclientv2.Configuration, error) {
+	// Create new config
+	sdkConfig := platformclientv2.GetDefaultConfiguration()
+
+	sdkConfig.BasePath = GetRegionBasePath(os.Getenv("GENESYSCLOUD_REGION"))
+
+	err := sdkConfig.AuthorizeClientCredentials(os.Getenv("GENESYSCLOUD_OAUTHCLIENT_ID"), os.Getenv("GENESYSCLOUD_OAUTHCLIENT_SECRET"))
+	if err != nil {
+		return sdkConfig, err
+	}
+
+	return sdkConfig, nil
 }

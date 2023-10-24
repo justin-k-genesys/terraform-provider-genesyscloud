@@ -4,23 +4,87 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+
+	"terraform-provider-genesyscloud/genesyscloud/util/resourcedata"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func resourcePhoneBaseSettings() *schema.Resource {
+var (
+	phoneCapabilities = &schema.Resource{
+		Schema: map[string]*schema.Schema{
+			"provisions": {
+				Description: "Provisions",
+				Type:        schema.TypeBool,
+				Optional:    true,
+			},
+			"registers": {
+				Description: "Registers",
+				Type:        schema.TypeBool,
+				Optional:    true,
+			},
+			"dual_registers": {
+				Description: "Dual Registers",
+				Type:        schema.TypeBool,
+				Optional:    true,
+			},
+			"hardware_id_type": {
+				Description: "HardwareId Type",
+				Type:        schema.TypeString,
+				Optional:    true,
+			},
+			"allow_reboot": {
+				Description: "Allow Reboot",
+				Type:        schema.TypeBool,
+				Optional:    true,
+			},
+			"no_rebalance": {
+				Description: "No Rebalance",
+				Type:        schema.TypeBool,
+				Optional:    true,
+			},
+			"no_cloud_provisioning": {
+				Description: "No Cloud Provisioning",
+				Type:        schema.TypeBool,
+				Optional:    true,
+			},
+			"media_codecs": {
+				Description: "Media Codecs",
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem: &schema.Schema{
+					Type:         schema.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{"audio/opus", "audio/pcmu", "audio/pcma", "audio/g729", "audio/g722"}, false),
+				},
+			},
+			"cdm": {
+				Description: "CDM",
+				Type:        schema.TypeBool,
+				Optional:    true,
+			},
+		},
+	}
+)
+
+func ResourcePhoneBaseSettings() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Phone Base Settings",
 
-		CreateContext: createWithPooledClient(createPhoneBaseSettings),
-		ReadContext:   readWithPooledClient(readPhoneBaseSettings),
-		UpdateContext: updateWithPooledClient(updatePhoneBaseSettings),
-		DeleteContext: deleteWithPooledClient(deletePhoneBaseSettings),
+		CreateContext: CreateWithPooledClient(createPhoneBaseSettings),
+		ReadContext:   ReadWithPooledClient(readPhoneBaseSettings),
+		UpdateContext: UpdateWithPooledClient(updatePhoneBaseSettings),
+		DeleteContext: DeleteWithPooledClient(deletePhoneBaseSettings),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -46,7 +110,7 @@ func resourcePhoneBaseSettings() *schema.Resource {
 				Type:             schema.TypeString,
 				Optional:         true,
 				Computed:         true,
-				DiffSuppressFunc: suppressEquivalentJsonDiffs,
+				DiffSuppressFunc: SuppressEquivalentJsonDiffs,
 			},
 			"capabilities": {
 				Description: "Phone Capabilities.",
@@ -70,7 +134,7 @@ func resourcePhoneBaseSettings() *schema.Resource {
 func createPhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 	description := d.Get("description").(string)
-	phoneMetaBase := buildSdkDomainEntityRef(d, "phone_meta_base_id")
+	phoneMetaBase := BuildSdkDomainEntityRef(d, "phone_meta_base_id")
 	properties := buildBaseSettingsProperties(d)
 
 	phoneBase := platformclientv2.Phonebase{
@@ -90,7 +154,7 @@ func createPhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta i
 		phoneBase.Description = &description
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	log.Printf("Creating phone base settings %s", name)
@@ -109,7 +173,7 @@ func createPhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta i
 func updatePhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 	description := d.Get("description").(string)
-	phoneMetaBase := buildSdkDomainEntityRef(d, "phone_meta_base_id")
+	phoneMetaBase := BuildSdkDomainEntityRef(d, "phone_meta_base_id")
 	properties := buildBaseSettingsProperties(d)
 	id := d.Id()
 
@@ -131,12 +195,12 @@ func updatePhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta i
 		phoneBase.Description = &description
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	phoneBaseSettings, resp, getErr := edgesAPI.GetTelephonyProvidersEdgesPhonebasesetting(d.Id())
 	if getErr != nil {
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			return nil
 		}
 		return diag.Errorf("Failed to read phone base settings %s: %s", d.Id(), getErr)
@@ -155,20 +219,20 @@ func updatePhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta i
 }
 
 func readPhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	log.Printf("Reading phone base settings %s", d.Id())
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		phoneBaseSettings, resp, getErr := edgesAPI.GetTelephonyProvidersEdgesPhonebasesetting(d.Id())
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read phone base settings %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read phone base settings %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read phone base settings %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read phone base settings %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourcePhoneBaseSettings())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourcePhoneBaseSettings())
 		d.Set("name", *phoneBaseSettings.Name)
 		if phoneBaseSettings.Description != nil {
 			d.Set("description", *phoneBaseSettings.Description)
@@ -181,7 +245,7 @@ func readPhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta int
 		if phoneBaseSettings.Properties != nil {
 			properties, err := flattenBaseSettingsProperties(phoneBaseSettings.Properties)
 			if err != nil {
-				return resource.NonRetryableError(fmt.Errorf("%v", err))
+				return retry.NonRetryableError(fmt.Errorf("%v", err))
 			}
 			d.Set("properties", properties)
 		}
@@ -201,7 +265,7 @@ func readPhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta int
 }
 
 func deletePhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting phone base settings")
@@ -210,15 +274,15 @@ func deletePhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta i
 		return diag.Errorf("Failed to delete phone base settings: %s", err)
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		phoneBaseSettings, resp, err := edgesAPI.GetTelephonyProvidersEdgesPhonebasesetting(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// Phone base settings deleted
 				log.Printf("Deleted Phone base settings %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting Phone base settings %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting Phone base settings %s: %s", d.Id(), err))
 		}
 
 		if phoneBaseSettings.State != nil && *phoneBaseSettings.State == "deleted" {
@@ -227,24 +291,24 @@ func deletePhoneBaseSettings(ctx context.Context, d *schema.ResourceData, meta i
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("Phone base settings %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Phone base settings %s still exists", d.Id()))
 	})
 }
 
-func getAllPhoneBaseSettings(ctx context.Context, sdkConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllPhoneBaseSettings(ctx context.Context, sdkConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
-	err := withRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	err := WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		for pageNum := 1; ; pageNum++ {
 			const pageSize = 100
 			phoneBaseSettings, resp, getErr := edgesAPI.GetTelephonyProvidersEdgesPhonebasesettings(pageSize, pageNum, "", "", nil, "")
 			if getErr != nil {
-				if isStatus404(resp) {
-					return resource.RetryableError(fmt.Errorf("Failed to get page of phonebasesettings: %v", getErr))
+				if IsStatus404(resp) {
+					return retry.RetryableError(fmt.Errorf("Failed to get page of phonebasesettings: %v", getErr))
 				}
-				return resource.NonRetryableError(fmt.Errorf("Failed to get page of phonebasesettings: %v", getErr))
+				return retry.NonRetryableError(fmt.Errorf("Failed to get page of phonebasesettings: %v", getErr))
 			}
 
 			if phoneBaseSettings.Entities == nil || len(*phoneBaseSettings.Entities) == 0 {
@@ -253,7 +317,7 @@ func getAllPhoneBaseSettings(ctx context.Context, sdkConfig *platformclientv2.Co
 
 			for _, phoneBaseSetting := range *phoneBaseSettings.Entities {
 				if phoneBaseSetting.State != nil && *phoneBaseSetting.State != "deleted" {
-					resources[*phoneBaseSetting.Id] = &ResourceMeta{Name: *phoneBaseSetting.Name}
+					resources[*phoneBaseSetting.Id] = &resourceExporter.ResourceMeta{Name: *phoneBaseSetting.Name}
 				}
 			}
 		}
@@ -264,10 +328,89 @@ func getAllPhoneBaseSettings(ctx context.Context, sdkConfig *platformclientv2.Co
 	return resources, err
 }
 
-func phoneBaseSettingsExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc:     getAllWithPooledClient(getAllPhoneBaseSettings),
-		RefAttrs:             map[string]*RefAttrSettings{},
+func PhoneBaseSettingsExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc:     GetAllWithPooledClient(getAllPhoneBaseSettings),
+		RefAttrs:             map[string]*resourceExporter.RefAttrSettings{},
 		JsonEncodeAttributes: []string{"properties"},
 	}
+}
+
+func buildSdkCapabilities(d *schema.ResourceData) *platformclientv2.Phonecapabilities {
+	if capabilities := d.Get("capabilities").([]interface{}); capabilities != nil {
+		sdkPhoneCapabilities := platformclientv2.Phonecapabilities{}
+		if len(capabilities) > 0 {
+			if _, ok := capabilities[0].(map[string]interface{}); !ok {
+				return nil
+			}
+			capabilitiesMap := capabilities[0].(map[string]interface{})
+
+			// Only set non-empty values.
+			provisions := capabilitiesMap["provisions"].(bool)
+			registers := capabilitiesMap["registers"].(bool)
+			dualRegisters := capabilitiesMap["dual_registers"].(bool)
+			var hardwareIdType string
+			if checkHardwareIdType := capabilitiesMap["hardware_id_type"].(string); len(checkHardwareIdType) > 0 {
+				hardwareIdType = checkHardwareIdType
+			}
+			allowReboot := capabilitiesMap["allow_reboot"].(bool)
+			noRebalance := capabilitiesMap["no_rebalance"].(bool)
+			noCloudProvisioning := capabilitiesMap["no_cloud_provisioning"].(bool)
+			mediaCodecs := make([]string, 0)
+			if checkMediaCodecs := capabilitiesMap["media_codecs"].([]interface{}); len(checkMediaCodecs) > 0 {
+				for _, codec := range checkMediaCodecs {
+					mediaCodecs = append(mediaCodecs, fmt.Sprintf("%v", codec))
+				}
+			}
+			cdm := capabilitiesMap["cdm"].(bool)
+
+			sdkPhoneCapabilities = platformclientv2.Phonecapabilities{
+				Provisions:          &provisions,
+				Registers:           &registers,
+				DualRegisters:       &dualRegisters,
+				HardwareIdType:      &hardwareIdType,
+				AllowReboot:         &allowReboot,
+				NoRebalance:         &noRebalance,
+				NoCloudProvisioning: &noCloudProvisioning,
+				MediaCodecs:         &mediaCodecs,
+				Cdm:                 &cdm,
+			}
+		}
+		return &sdkPhoneCapabilities
+	}
+	return nil
+}
+
+func flattenPhoneCapabilities(capabilities *platformclientv2.Phonecapabilities) []interface{} {
+	if capabilities == nil {
+		return nil
+	}
+
+	capabilitiesMap := make(map[string]interface{})
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "provisions", capabilities.Provisions)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "registers", capabilities.Registers)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "dual_registers", capabilities.DualRegisters)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "hardware_id_type", capabilities.HardwareIdType)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "allow_reboot", capabilities.AllowReboot)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "no_rebalance", capabilities.NoRebalance)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "no_cloud_provisioning", capabilities.NoCloudProvisioning)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "media_codecs", capabilities.MediaCodecs)
+	resourcedata.SetMapValueIfNotNil(capabilitiesMap, "cdm", capabilities.Cdm)
+
+	return []interface{}{capabilitiesMap}
+}
+
+func GeneratePhoneBaseSettingsResourceWithCustomAttrs(
+	phoneBaseSettingsRes,
+	name,
+	description,
+	phoneMetaBaseId string,
+	otherAttrs ...string) string {
+	return fmt.Sprintf(`resource "genesyscloud_telephony_providers_edges_phonebasesettings" "%s" {
+		name = "%s"
+		description = "%s"
+		phone_meta_base_id = "%s"
+		%s
+	}
+	`, phoneBaseSettingsRes, name, description, phoneMetaBaseId, strings.Join(otherAttrs, "\n"))
 }

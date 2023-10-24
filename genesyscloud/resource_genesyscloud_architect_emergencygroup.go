@@ -6,15 +6,19 @@ import (
 	"log"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func getAllEmergencyGroups(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllEmergencyGroups(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	architectAPI := platformclientv2.NewArchitectApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -30,7 +34,7 @@ func getAllEmergencyGroups(_ context.Context, clientConfig *platformclientv2.Con
 
 		for _, emergencyGroupConfig := range *emergencyGroupConfigs.Entities {
 			if emergencyGroupConfig.State != nil && *emergencyGroupConfig.State != "deleted" {
-				resources[*emergencyGroupConfig.Id] = &ResourceMeta{Name: *emergencyGroupConfig.Name}
+				resources[*emergencyGroupConfig.Id] = &resourceExporter.ResourceMeta{Name: *emergencyGroupConfig.Name}
 			}
 		}
 	}
@@ -38,10 +42,10 @@ func getAllEmergencyGroups(_ context.Context, clientConfig *platformclientv2.Con
 	return resources, nil
 }
 
-func architectEmergencyGroupExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllEmergencyGroups),
-		RefAttrs: map[string]*RefAttrSettings{
+func ArchitectEmergencyGroupExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllEmergencyGroups),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"division_id":                            {RefType: "genesyscloud_auth_division"},
 			"emergency_call_flows.emergency_flow_id": {RefType: "genesyscloud_flow"},
 			"emergency_call_flows.ivr_ids":           {RefType: "genesyscloud_architect_ivr"},
@@ -49,21 +53,21 @@ func architectEmergencyGroupExporter() *ResourceExporter {
 	}
 }
 
-func resourceArchitectEmergencyGroup() *schema.Resource {
+func ResourceArchitectEmergencyGroup() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Architect Emergency Group",
 
-		CreateContext: createWithPooledClient(createEmergencyGroup),
-		ReadContext:   readWithPooledClient(readEmergencyGroup),
-		UpdateContext: updateWithPooledClient(updateEmergencyGroup),
-		DeleteContext: deleteWithPooledClient(deleteEmergencyGroup),
+		CreateContext: CreateWithPooledClient(createEmergencyGroup),
+		ReadContext:   ReadWithPooledClient(readEmergencyGroup),
+		UpdateContext: UpdateWithPooledClient(updateEmergencyGroup),
+		DeleteContext: DeleteWithPooledClient(deleteEmergencyGroup),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
 		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 			"name": {
-				Description: "Name of the emergency group.",
+				Description: "Name of the emergency group. Note:  If the name is changed, the emergency group is dropped and recreated with a new ID. This can cause an Architect flow to be invalid if it references the old emergency group",
 				Type:        schema.TypeString,
 				Required:    true,
 				ForceNew:    true,
@@ -115,7 +119,7 @@ func createEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 	divisionId := d.Get("division_id").(string)
 	enabled := d.Get("enabled").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	architectAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	emergencyGroup := platformclientv2.Emergencygroup{
@@ -130,7 +134,7 @@ func createEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 	}
 
 	if divisionId != "" {
-		emergencyGroup.Division = &platformclientv2.Division{Id: &divisionId}
+		emergencyGroup.Division = &platformclientv2.Writabledivision{Id: &divisionId}
 	}
 
 	log.Printf("Creating emergency group %s", name)
@@ -147,20 +151,20 @@ func createEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 }
 
 func readEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	architectApi := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Reading emergency group %s", d.Id())
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		emergencyGroup, resp, getErr := architectApi.GetArchitectEmergencygroup(d.Id())
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read emergency group %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read emergency group %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read emergency group %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read emergency group %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceArchitectEmergencyGroup())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceArchitectEmergencyGroup())
 
 		if emergencyGroup.State != nil && *emergencyGroup.State == "deleted" {
 			d.SetId("")
@@ -199,10 +203,10 @@ func updateEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 	divisionId := d.Get("division_id").(string)
 	enabled := d.Get("enabled").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	architectAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
-	diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Get current emergency group version
 		emergencyGroup, resp, getErr := architectAPI.GetArchitectEmergencygroup(d.Id())
 		if getErr != nil {
@@ -212,7 +216,7 @@ func updateEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 		log.Printf("Updating emergency group %s", name)
 		_, resp, putErr := architectAPI.PutArchitectEmergencygroup(d.Id(), platformclientv2.Emergencygroup{
 			Name:               &name,
-			Division:           &platformclientv2.Division{Id: &divisionId},
+			Division:           &platformclientv2.Writabledivision{Id: &divisionId},
 			Description:        &description,
 			Version:            emergencyGroup.Version,
 			State:              emergencyGroup.State,
@@ -234,7 +238,7 @@ func updateEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 }
 
 func deleteEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	architectApi := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting emergency group %s", d.Id())
@@ -242,15 +246,15 @@ func deleteEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 	if err != nil {
 		return diag.Errorf("Failed to delete emergency group %s: %s", d.Id(), err)
 	}
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		emergencyGroup, resp, err := architectApi.GetArchitectEmergencygroup(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// group deleted
 				log.Printf("Deleted emergency group %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("error deleting emergency group %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("error deleting emergency group %s: %s", d.Id(), err))
 		}
 
 		if emergencyGroup.State != nil && *emergencyGroup.State == "deleted" {
@@ -259,7 +263,7 @@ func deleteEmergencyGroup(ctx context.Context, d *schema.ResourceData, meta inte
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("emergency group %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("emergency group %s still exists", d.Id()))
 	})
 }
 

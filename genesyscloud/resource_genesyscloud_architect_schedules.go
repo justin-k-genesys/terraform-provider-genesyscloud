@@ -7,17 +7,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/leekchan/timeutil"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func getAllArchitectSchedules(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllArchitectSchedules(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	archAPI := platformclientv2.NewArchitectApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -32,30 +35,30 @@ func getAllArchitectSchedules(_ context.Context, clientConfig *platformclientv2.
 		}
 
 		for _, schedule := range *schedules.Entities {
-			resources[*schedule.Id] = &ResourceMeta{Name: *schedule.Name}
+			resources[*schedule.Id] = &resourceExporter.ResourceMeta{Name: *schedule.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func architectSchedulesExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllArchitectSchedules),
-		RefAttrs: map[string]*RefAttrSettings{
+func ArchitectSchedulesExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllArchitectSchedules),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"division_id": {RefType: "genesyscloud_auth_division"},
 		},
 	}
 }
 
-func resourceArchitectSchedules() *schema.Resource {
+func ResourceArchitectSchedules() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Architect Schedules",
 
-		CreateContext: createWithPooledClient(createArchitectSchedules),
-		ReadContext:   readWithPooledClient(readArchitectSchedules),
-		UpdateContext: updateWithPooledClient(updateArchitectSchedules),
-		DeleteContext: deleteWithPooledClient(deleteArchitectSchedules),
+		CreateContext: CreateWithPooledClient(createArchitectSchedules),
+		ReadContext:   ReadWithPooledClient(readArchitectSchedules),
+		UpdateContext: UpdateWithPooledClient(updateArchitectSchedules),
+		DeleteContext: DeleteWithPooledClient(deleteArchitectSchedules),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -65,7 +68,6 @@ func resourceArchitectSchedules() *schema.Resource {
 				Description: "Name of the schedule.",
 				Type:        schema.TypeString,
 				Required:    true,
-				ForceNew:    true,
 			},
 			"division_id": {
 				Description: "The division to which this schedule group will belong. If not set, the home division will be used. If set, you must have all divisions and future divisions selected in your OAuth client role",
@@ -107,7 +109,7 @@ func createArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 	end := d.Get("end").(string)
 	rrule := d.Get("rrule").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	schedStart, err := time.Parse("2006-01-02T15:04:05.000000", start)
@@ -133,7 +135,7 @@ func createArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 	}
 
 	if divisionID != "" {
-		sched.Division = &platformclientv2.Division{Id: &divisionID}
+		sched.Division = &platformclientv2.Writabledivision{Id: &divisionID}
 	}
 
 	log.Printf("Creating schedule %s", name)
@@ -153,18 +155,18 @@ func createArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 }
 
 func readArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Reading schedule %s", d.Id())
 
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		schedule, resp, getErr := archAPI.GetArchitectSchedule(d.Id())
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read schedule %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read schedule %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read schedule %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read schedule %s: %s", d.Id(), getErr))
 		}
 
 		Start := new(string)
@@ -183,7 +185,7 @@ func readArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta in
 			End = nil
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceArchitectSchedules())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceArchitectSchedules())
 		d.Set("name", *schedule.Name)
 		d.Set("division_id", *schedule.Division.Id)
 		d.Set("description", nil)
@@ -210,7 +212,7 @@ func updateArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 	end := d.Get("end").(string)
 	rrule := d.Get("rrule").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	schedStart, err := time.Parse("2006-01-02T15:04:05.000000", start)
@@ -223,7 +225,7 @@ func updateArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 		return diag.Errorf("Failed to parse date %s: %s", end, err)
 	}
 
-	diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Get current schedule version
 		sched, resp, getErr := archAPI.GetArchitectSchedule(d.Id())
 		if getErr != nil {
@@ -234,7 +236,7 @@ func updateArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 		_, resp, putErr := archAPI.PutArchitectSchedule(d.Id(), platformclientv2.Schedule{
 			Name:        &name,
 			Version:     sched.Version,
-			Division:    &platformclientv2.Division{Id: &divisionID},
+			Division:    &platformclientv2.Writabledivision{Id: &divisionID},
 			Description: &description,
 			Start:       &schedStart,
 			End:         &schedEnd,
@@ -258,7 +260,7 @@ func updateArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 }
 
 func deleteArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting schedule %s", d.Id())
@@ -267,15 +269,15 @@ func deleteArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 		return diag.Errorf("Failed to delete schedule %s: %s", d.Id(), err)
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		schedule, resp, err := archAPI.GetArchitectSchedule(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// schedule deleted
 				log.Printf("Deleted schedule %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting schedule %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting schedule %s: %s", d.Id(), err))
 		}
 
 		if schedule.State != nil && *schedule.State == "deleted" {
@@ -284,6 +286,6 @@ func deleteArchitectSchedules(ctx context.Context, d *schema.ResourceData, meta 
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("Schedule %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Schedule %s still exists", d.Id()))
 	})
 }

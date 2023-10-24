@@ -1,9 +1,7 @@
 package genesyscloud
 
 import (
-	"fmt"
 	"strconv"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -15,7 +13,7 @@ func TestAccResourceUserRolesMembership(t *testing.T) {
 	var (
 		empRoleDataSrc   = "employee-role"
 		empRoleName      = "employee"
-		userRoleResource = "test-user-roles"
+		userRoleResource = "test-user-roles2"
 		userResource1    = "test-user"
 		email1           = "terraform-" + uuid.NewString() + "@example.com"
 		userName1        = "Role Terraform"
@@ -29,25 +27,25 @@ func TestAccResourceUserRolesMembership(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create user with 1 role in default division
 				// Also add employee role reference as new user's automatically get this role
-				Config: generateBasicUserResource(
+				Config: GenerateBasicUserResource(
 					userResource1,
 					email1,
 					userName1,
-				) + generateAuthRoleResource(
+				) + GenerateAuthRoleResource(
 					roleResource1,
 					roleName1,
 					roleDesc,
-				) + generateUserRoles(
+				) + GenerateUserRoles(
 					userRoleResource,
 					userResource1,
-					generateResourceRoles("genesyscloud_auth_role."+roleResource1+".id"),
-					generateResourceRoles("data.genesyscloud_auth_role."+empRoleDataSrc+".id"),
+					GenerateResourceRoles("genesyscloud_auth_role."+roleResource1+".id"),
+					GenerateResourceRoles("data.genesyscloud_auth_role."+empRoleDataSrc+".id"),
 				) + generateDefaultAuthRoleDataSource(
 					empRoleDataSrc,
 					strconv.Quote(empRoleName),
@@ -58,23 +56,23 @@ func TestAccResourceUserRolesMembership(t *testing.T) {
 			},
 			{
 				// Create another role and division and add to the user
-				Config: generateBasicUserResource(
+				Config: GenerateBasicUserResource(
 					userResource1,
 					email1,
 					userName1,
-				) + generateAuthRoleResource(
+				) + GenerateAuthRoleResource(
 					roleResource1,
 					roleName1,
 					roleDesc,
-				) + generateAuthRoleResource(
+				) + GenerateAuthRoleResource(
 					roleResource2,
 					roleName2,
 					roleDesc,
-				) + generateUserRoles(
+				) + GenerateUserRoles(
 					userRoleResource,
 					userResource1,
-					generateResourceRoles("genesyscloud_auth_role."+roleResource1+".id"),
-					generateResourceRoles("genesyscloud_auth_role."+roleResource2+".id", "genesyscloud_auth_division."+divResource+".id"),
+					GenerateResourceRoles("genesyscloud_auth_role."+roleResource1+".id"),
+					GenerateResourceRoles("genesyscloud_auth_role."+roleResource2+".id", "genesyscloud_auth_division."+divResource+".id"),
 				) + generateAuthDivisionBasic(divResource, divName),
 				Check: resource.ComposeTestCheckFunc(
 					validateResourceRole("genesyscloud_user_roles."+userRoleResource, "genesyscloud_auth_role."+roleResource1),
@@ -83,18 +81,18 @@ func TestAccResourceUserRolesMembership(t *testing.T) {
 			},
 			{
 				// Remove a role from the user and modify division
-				Config: generateBasicUserResource(
+				Config: GenerateBasicUserResource(
 					userResource1,
 					email1,
 					userName1,
-				) + generateAuthRoleResource(
+				) + GenerateAuthRoleResource(
 					roleResource1,
 					roleName1,
 					roleDesc,
-				) + generateUserRoles(
+				) + GenerateUserRoles(
 					userRoleResource,
 					userResource1,
-					generateResourceRoles("genesyscloud_auth_role."+roleResource1+".id", "genesyscloud_auth_division."+divResource+".id"),
+					GenerateResourceRoles("genesyscloud_auth_role."+roleResource1+".id", "genesyscloud_auth_division."+divResource+".id"),
 				) + generateAuthDivisionBasic(divResource, divName),
 				Check: resource.ComposeTestCheckFunc(
 					validateResourceRole("genesyscloud_user_roles."+userRoleResource, "genesyscloud_auth_role."+roleResource1, "genesyscloud_auth_division."+divResource),
@@ -102,15 +100,15 @@ func TestAccResourceUserRolesMembership(t *testing.T) {
 			},
 			{
 				// Remove all roles from the user
-				Config: generateBasicUserResource(
+				Config: GenerateBasicUserResource(
 					userResource1,
 					email1,
 					userName1,
-				) + generateAuthRoleResource(
+				) + GenerateAuthRoleResource(
 					roleResource1,
 					roleName1,
 					roleDesc,
-				) + generateUserRoles(
+				) + GenerateUserRoles(
 					userRoleResource,
 					userResource1,
 				) + generateAuthDivisionBasic(divResource, divName),
@@ -120,12 +118,4 @@ func TestAccResourceUserRolesMembership(t *testing.T) {
 			},
 		},
 	})
-}
-
-func generateUserRoles(resourceID string, userResource string, roles ...string) string {
-	return fmt.Sprintf(`resource "genesyscloud_user_roles" "%s" {
-		user_id = genesyscloud_user.%s.id
-		%s
-	}
-	`, resourceID, userResource, strings.Join(roles, "\n"))
 }

@@ -7,11 +7,10 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceIdpPing(t *testing.T) {
-	t.Parallel()
 	var (
 		uri1            = "https://test.com/1"
 		uri2            = "https://test.com/2"
@@ -20,8 +19,8 @@ func TestAccResourceIdpPing(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
@@ -33,7 +32,7 @@ func TestAccResourceIdpPing(t *testing.T) {
 					nullValue, // Not disabled
 				),
 				Check: resource.ComposeTestCheckFunc(
-					validateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "issuer_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "target_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "relying_party_identifier", ""),
@@ -50,7 +49,7 @@ func TestAccResourceIdpPing(t *testing.T) {
 					trueValue, // disabled
 				),
 				Check: resource.ComposeTestCheckFunc(
-					validateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert2),
+					ValidateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "issuer_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "target_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "relying_party_identifier", relyingPartyID1),
@@ -67,8 +66,45 @@ func TestAccResourceIdpPing(t *testing.T) {
 					falseValue, // disabled
 				),
 				Check: resource.ComposeTestCheckFunc(
-					validateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert1),
-					validateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert2),
+					ValidateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "issuer_uri", uri2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "target_uri", uri1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "relying_party_identifier", relyingPartyID2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "disabled", falseValue),
+				),
+			},
+			{
+				// Update to one cert in array
+				Config: generateIdpPingResource(
+					generateStringArray(strconv.Quote(testCert1)),
+					uri2,
+					uri1,
+					strconv.Quote(relyingPartyID2),
+					falseValue, // disabled
+				),
+				Check: resource.ComposeTestCheckFunc(
+					ValidateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "certificates.#", "1"),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "issuer_uri", uri2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "target_uri", uri1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "relying_party_identifier", relyingPartyID2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "disabled", falseValue),
+				),
+			},
+			{
+				// Update back to two certs
+				Config: generateIdpPingResource(
+					generateStringArray(strconv.Quote(testCert1), strconv.Quote(testCert2)),
+					uri2,
+					uri1,
+					strconv.Quote(relyingPartyID2),
+					falseValue, // disabled
+				),
+				Check: resource.ComposeTestCheckFunc(
+					ValidateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_ping.ping", "certificates", testCert2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "certificates.#", "2"),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "issuer_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "target_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_ping.ping", "relying_party_identifier", relyingPartyID2),
@@ -112,7 +148,7 @@ func testVerifyIdpPingDestroyed(state *terraform.State) error {
 		ping, resp, err := idpAPI.GetIdentityprovidersPing()
 		if ping != nil {
 			return fmt.Errorf("Ping still exists")
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Ping not found as expected
 			continue
 		} else {

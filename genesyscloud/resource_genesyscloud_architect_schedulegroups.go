@@ -7,16 +7,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func getAllArchitectScheduleGroups(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllArchitectScheduleGroups(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	archAPI := platformclientv2.NewArchitectApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -31,17 +34,17 @@ func getAllArchitectScheduleGroups(_ context.Context, clientConfig *platformclie
 		}
 
 		for _, scheduleGroup := range *scheduleGroups.Entities {
-			resources[*scheduleGroup.Id] = &ResourceMeta{Name: *scheduleGroup.Name}
+			resources[*scheduleGroup.Id] = &resourceExporter.ResourceMeta{Name: *scheduleGroup.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func architectScheduleGroupsExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllArchitectScheduleGroups),
-		RefAttrs: map[string]*RefAttrSettings{
+func ArchitectScheduleGroupsExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllArchitectScheduleGroups),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"division_id":          {RefType: "genesyscloud_auth_division"},
 			"open_schedules_id":    {RefType: "genesyscloud_architect_schedules"},
 			"closed_schedules_id":  {RefType: "genesyscloud_architect_schedules"},
@@ -50,14 +53,14 @@ func architectScheduleGroupsExporter() *ResourceExporter {
 	}
 }
 
-func resourceArchitectScheduleGroups() *schema.Resource {
+func ResourceArchitectScheduleGroups() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Architect Schedule Groups",
 
-		CreateContext: createWithPooledClient(createArchitectScheduleGroups),
-		ReadContext:   readWithPooledClient(readArchitectScheduleGroups),
-		UpdateContext: updateWithPooledClient(updateArchitectScheduleGroups),
-		DeleteContext: deleteWithPooledClient(deleteArchitectScheduleGroups),
+		CreateContext: CreateWithPooledClient(createArchitectScheduleGroups),
+		ReadContext:   ReadWithPooledClient(readArchitectScheduleGroups),
+		UpdateContext: UpdateWithPooledClient(updateArchitectScheduleGroups),
+		DeleteContext: DeleteWithPooledClient(deleteArchitectScheduleGroups),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -87,7 +90,7 @@ func resourceArchitectScheduleGroups() *schema.Resource {
 			"open_schedules_id": {
 				Description: "The schedules defining the hours an organization is open.",
 				Type:        schema.TypeSet,
-				Optional:    true,
+				Required:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
 			"closed_schedules_id": {
@@ -112,19 +115,19 @@ func createArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, 
 	description := d.Get("description").(string)
 	timeZone := d.Get("time_zone").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	schedGroup := platformclientv2.Schedulegroup{
 		Name:             &name,
-		OpenSchedules:    buildSdkDomainEntityRefArr(d, "open_schedules_id"),
-		ClosedSchedules:  buildSdkDomainEntityRefArr(d, "closed_schedules_id"),
-		HolidaySchedules: buildSdkDomainEntityRefArr(d, "holiday_schedules_id"),
+		OpenSchedules:    BuildSdkDomainEntityRefArr(d, "open_schedules_id"),
+		ClosedSchedules:  BuildSdkDomainEntityRefArr(d, "closed_schedules_id"),
+		HolidaySchedules: BuildSdkDomainEntityRefArr(d, "holiday_schedules_id"),
 	}
 
 	// Optional attributes
 	if divisionID != "" {
-		schedGroup.Division = &platformclientv2.Division{Id: &divisionID}
+		schedGroup.Division = &platformclientv2.Writabledivision{Id: &divisionID}
 	}
 
 	if description != "" {
@@ -152,21 +155,21 @@ func createArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, 
 }
 
 func readArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Reading schedule group %s", d.Id())
 
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		scheduleGroup, resp, getErr := archAPI.GetArchitectSchedulegroup(d.Id())
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read schedule group %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read schedule group %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read schedule group %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read schedule group %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceArchitectScheduleGroups())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceArchitectScheduleGroups())
 		d.Set("name", *scheduleGroup.Name)
 		d.Set("division_id", *scheduleGroup.Division.Id)
 		d.Set("description", nil)
@@ -208,10 +211,10 @@ func updateArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, 
 	description := d.Get("description").(string)
 	timeZone := d.Get("time_zone").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
-	diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Get current schedule group version
 		scheduleGroup, resp, getErr := archAPI.GetArchitectSchedulegroup(d.Id())
 		if getErr != nil {
@@ -221,13 +224,13 @@ func updateArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, 
 		log.Printf("Updating schedule group %s", name)
 		_, resp, putErr := archAPI.PutArchitectSchedulegroup(d.Id(), platformclientv2.Schedulegroup{
 			Name:             &name,
-			Division:         &platformclientv2.Division{Id: &divisionID},
+			Division:         &platformclientv2.Writabledivision{Id: &divisionID},
 			Version:          scheduleGroup.Version,
 			Description:      &description,
 			TimeZone:         &timeZone,
-			OpenSchedules:    buildSdkDomainEntityRefArr(d, "open_schedules_id"),
-			ClosedSchedules:  buildSdkDomainEntityRefArr(d, "closed_schedules_id"),
-			HolidaySchedules: buildSdkDomainEntityRefArr(d, "holiday_schedules_id"),
+			OpenSchedules:    BuildSdkDomainEntityRefArr(d, "open_schedules_id"),
+			ClosedSchedules:  BuildSdkDomainEntityRefArr(d, "closed_schedules_id"),
+			HolidaySchedules: BuildSdkDomainEntityRefArr(d, "holiday_schedules_id"),
 		})
 		if putErr != nil {
 			msg := ""
@@ -247,7 +250,7 @@ func updateArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, 
 }
 
 func deleteArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting schedule %s", d.Id())
@@ -256,15 +259,15 @@ func deleteArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, 
 		return diag.Errorf("Failed to delete schedule group %s: %s", d.Id(), err)
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		scheduleGroup, resp, err := archAPI.GetArchitectSchedulegroup(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// schedule group deleted
 				log.Printf("Deleted schedule group %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting schedule group %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting schedule group %s: %s", d.Id(), err))
 		}
 
 		if scheduleGroup.State != nil && *scheduleGroup.State == "deleted" {
@@ -273,6 +276,6 @@ func deleteArchitectScheduleGroups(ctx context.Context, d *schema.ResourceData, 
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("Schedule group %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Schedule group %s still exists", d.Id()))
 	})
 }

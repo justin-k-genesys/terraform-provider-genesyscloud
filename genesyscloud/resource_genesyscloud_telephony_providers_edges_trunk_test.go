@@ -25,7 +25,7 @@ func TestAccResourceTrunk(t *testing.T) {
 		trunkRes = "trunkRes"
 	)
 
-	phoneTrunkBaseSettings := generateTrunkBaseSettingsResourceWithCustomAttrs(
+	phoneTrunkBaseSettings := GenerateTrunkBaseSettingsResourceWithCustomAttrs(
 		phoneTrunkBaseSettingsRes,
 		"phone trunk base settings "+uuid.NewString(),
 		"",
@@ -33,7 +33,7 @@ func TestAccResourceTrunk(t *testing.T) {
 		"PHONE",
 		false)
 
-	trunkBaseSettingsConfig := generateTrunkBaseSettingsResourceWithCustomAttrs(
+	trunkBaseSettingsConfig := GenerateTrunkBaseSettingsResourceWithCustomAttrs(
 		trunkBaseSettingsRes,
 		"test trunk base settings "+uuid.NewString(),
 		"test description 1",
@@ -42,8 +42,8 @@ func TestAccResourceTrunk(t *testing.T) {
 		false)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			// Create the trunk by creating trunk base settings and an edge group and assigning the trunk base settings to the edge group
 			{

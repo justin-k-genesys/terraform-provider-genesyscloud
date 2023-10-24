@@ -33,6 +33,10 @@ resource "genesyscloud_webdeployments_configuration" "exampleConfiguration" {
     launcher_button {
       visibility = "OnDemand"
     }
+    home_screen {
+      enabled  = true
+      logo_url = "https://my-domain/images/my-logo.png"
+    }
     styles {
       primary_color = "#B0B0B0"
     }
@@ -46,6 +50,13 @@ resource "genesyscloud_webdeployments_configuration" "exampleConfiguration" {
         max_file_size_kb = 128
       }
     }
+  }
+  cobrowse {
+    enabled             = true
+    allow_agent_control = true
+    channels            = ["Webmessaging", "Voice"]
+    mask_selectors      = [".my-class", "#my-id"]
+    readonly_selectors  = [".my-class", "#my-id"]
   }
   journey_events {
     enabled                   = true
@@ -114,21 +125,34 @@ resource "genesyscloud_webdeployments_configuration" "exampleConfiguration" {
 
 ### Required
 
+- `default_language` (String) The default language to use for the configuration.
+- `languages` (List of String) A list of languages supported on the configuration.
 - `name` (String) Deployment name
 
 ### Optional
 
-- `default_language` (String) The default language to use for the configuration.
+- `cobrowse` (Block List, Max: 1) Settings concerning cobrowse (see [below for nested schema](#nestedblock--cobrowse))
 - `description` (String) Deployment description
 - `journey_events` (Block List, Max: 1) Settings concerning journey events (see [below for nested schema](#nestedblock--journey_events))
-- `languages` (List of String) A list of languages supported on the configuration.
 - `messenger` (Block List, Max: 1) Settings concerning messenger (see [below for nested schema](#nestedblock--messenger))
 - `status` (String) The current status of the deployment. Valid values: Pending, Active, Inactive, Error, Deleting.
-- `version` (String) The version of the configuration.
 
 ### Read-Only
 
 - `id` (String) The ID of this resource.
+- `version` (String) The version of the configuration.
+
+<a id="nestedblock--cobrowse"></a>
+### Nested Schema for `cobrowse`
+
+Optional:
+
+- `allow_agent_control` (Boolean) Whether agent can take control over customer's screen or not
+- `channels` (List of String) List of channels through which cobrowse is available (for now only Webmessaging and Voice)
+- `enabled` (Boolean) Whether or not cobrowse is enabled
+- `mask_selectors` (List of String) List of CSS selectors which should be masked when screen sharing is active
+- `readonly_selectors` (List of String) List of CSS selectors which should be read-only when screen sharing is active
+
 
 <a id="nestedblock--journey_events"></a>
 ### Nested Schema for `journey_events`
@@ -202,8 +226,9 @@ Required:
 
 Optional:
 
-- `enabled` (Boolean) Whether or not messenger is enabled Defaults to `true`.
+- `enabled` (Boolean) Whether or not messenger is enabled
 - `file_upload` (Block List, Max: 1) File upload settings for messenger (see [below for nested schema](#nestedblock--messenger--file_upload))
+- `home_screen` (Block List, Max: 1) The settings for the home screen (see [below for nested schema](#nestedblock--messenger--home_screen))
 - `launcher_button` (Block List, Max: 1) The settings for the launcher button (see [below for nested schema](#nestedblock--messenger--launcher_button))
 - `styles` (Block List, Max: 1) The style settings for messenger (see [below for nested schema](#nestedblock--messenger--styles))
 
@@ -222,6 +247,15 @@ Optional:
 - `file_types` (List of String) A list of supported content types for uploading files.Valid values: image/jpeg, image/gif, image/png
 - `max_file_size_kb` (Number) The maximum file size for file uploads in kilobytes. Default is 10240 (10 MB)
 
+
+
+<a id="nestedblock--messenger--home_screen"></a>
+### Nested Schema for `messenger.home_screen`
+
+Optional:
+
+- `enabled` (Boolean) Whether or not home screen is enabled
+- `logo_url` (String) URL for custom logo to appear in home screen
 
 
 <a id="nestedblock--messenger--launcher_button"></a>

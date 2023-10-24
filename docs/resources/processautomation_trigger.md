@@ -3,13 +3,10 @@ page_title: "genesyscloud_processautomation_trigger Resource - terraform-provide
 subcategory: ""
 description: |-
   Genesys Cloud Process Automation Trigger
-  NOTE: This component is currently in beta. If you wish to use this provider make sure your client has the correct permissions
 ---
 # genesyscloud_processautomation_trigger (Resource)
 
 Genesys Cloud Process Automation Trigger
-
-**NOTE: This component is currently in beta. If you wish to use this provider make sure your client has the correct permissions**
 
 ## API Usage
 The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Client has been granted the necessary scopes and permissions to perform these operations:
@@ -23,20 +20,26 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_processautomation_trigger" "test-trigger" {
-  name       = "Test Trigger"
+resource "genesyscloud_processautomation_trigger" "example-trigger" {
+  name       = "Example Trigger"
   topic_name = "v2.detail.events.conversation.{id}.customer.end"
   enabled    = true
   target {
     id   = data.genesyscloud_flow.workflow-trigger.id
     type = "Workflow"
+    workflow_target_settings {
+      data_format = "TopLevelPrimitives"
+    }
   }
-  match_criteria {
-    json_path = "mediaType"
-    operator  = "Equal"
-    value     = "CHAT"
-  }
+  match_criteria = jsonencode([
+    {
+      "jsonPath" : "mediaType",
+      "operator" : "Equal",
+      "value" : "CHAT"
+    }
+  ])
   event_ttl_seconds = 60
+  description       = "description of trigger"
 }
 ```
 
@@ -48,12 +51,14 @@ resource "genesyscloud_processautomation_trigger" "test-trigger" {
 - `enabled` (Boolean) Whether or not the trigger should be fired on events
 - `name` (String) Name of the Trigger
 - `target` (Block Set, Min: 1, Max: 1) Target the trigger will invoke when fired (see [below for nested schema](#nestedblock--target))
-- `topic_name` (String) Topic name that will fire trigger. (Updating requires replacement of trigger)
+- `topic_name` (String) Topic name that will fire trigger. Changing the topic_name attribute will cause the processautomation_trigger object to be dropped and recreated with a new ID.
 
 ### Optional
 
-- `event_ttl_seconds` (Number) How old an event can be to fire the trigger. Must be an number greater than or equal to 10
-- `match_criteria` (Block Set) Match criteria that controls when the trigger will fire. (see [below for nested schema](#nestedblock--match_criteria))
+- `delay_by_seconds` (Number) How long to delay processing of a trigger after an event passes the match criteria. Must be an number between 60 and 900 inclusive. Only one of event_ttl_seconds or delay_by_seconds can be set.
+- `description` (String) A description of the trigger
+- `event_ttl_seconds` (Number) How old an event can be to fire the trigger. Must be an number greater than or equal to 10. Only one of event_ttl_seconds or delay_by_seconds can be set.
+- `match_criteria` (String) Match criteria that controls when the trigger will fire. NOTE: The match_criteria field type has changed from a complex object to a string. This was done to allow for complex JSON object definitions.
 
 ### Read-Only
 
@@ -67,17 +72,14 @@ Required:
 - `id` (String) Id of the target the trigger is configured to hit
 - `type` (String) Type of the target the trigger is configured to hit
 
+Optional:
 
-<a id="nestedblock--match_criteria"></a>
-### Nested Schema for `match_criteria`
+- `workflow_target_settings` (Block Set, Max: 1) Optional config for the target. Until the feature gets enabled will always operate in TopLevelPrimitives mode. (see [below for nested schema](#nestedblock--target--workflow_target_settings))
 
-Required:
-
-- `json_path` (String) The json path of the topic event to be compared to match criteria value
-- `operator` (String) The operator used to compare the json path against the value of the match criteria
+<a id="nestedblock--target--workflow_target_settings"></a>
+### Nested Schema for `target.workflow_target_settings`
 
 Optional:
 
-- `value` (String) Value the jsonPath is compared against
-- `values` (List of String) Values the jsonPath are compared against
+- `data_format` (String) The data format to use when invoking target.
 

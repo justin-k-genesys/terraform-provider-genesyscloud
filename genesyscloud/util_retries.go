@@ -7,29 +7,32 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func withRetries(ctx context.Context, timeout time.Duration, method func() *resource.RetryError) diag.Diagnostics {
-	err := diag.FromErr(resource.RetryContext(ctx, timeout, method))
+func WithRetries(ctx context.Context, timeout time.Duration, method func() *retry.RetryError) diag.Diagnostics {
+	err := diag.FromErr(retry.RetryContext(ctx, timeout, method))
 	if err != nil && strings.Contains(fmt.Sprintf("%v", err), "timeout while waiting for state to become") {
-		ctx, _ := context.WithTimeout(context.Background(), timeout)
-		return withRetries(ctx, timeout, method)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		return WithRetries(ctx, timeout, method)
 	}
 	return err
 }
 
-func withRetriesForRead(ctx context.Context, d *schema.ResourceData, method func() *resource.RetryError) diag.Diagnostics {
-	return withRetriesForReadCustomTimeout(ctx, 5*time.Minute, d, method)
+func WithRetriesForRead(ctx context.Context, d *schema.ResourceData, method func() *retry.RetryError) diag.Diagnostics {
+	return WithRetriesForReadCustomTimeout(ctx, 5*time.Minute, d, method)
 }
 
-func withRetriesForReadCustomTimeout(ctx context.Context, timeout time.Duration, d *schema.ResourceData, method func() *resource.RetryError) diag.Diagnostics {
-	err := diag.FromErr(resource.RetryContext(ctx, timeout, method))
+func WithRetriesForReadCustomTimeout(ctx context.Context, timeout time.Duration, d *schema.ResourceData, method func() *retry.RetryError) diag.Diagnostics {
+	err := diag.FromErr(retry.RetryContext(ctx, timeout, method))
 	if err != nil {
 		if strings.Contains(fmt.Sprintf("%v", err), "API Error: 404") {
 			// Set ID empty if the object isn't found after the specified timeout
@@ -38,8 +41,9 @@ func withRetriesForReadCustomTimeout(ctx context.Context, timeout time.Duration,
 		errStringLower := strings.ToLower(fmt.Sprintf("%v", err))
 		if strings.Contains(errStringLower, "timeout while waiting for state to become") ||
 			strings.Contains(errStringLower, "context deadline exceeded") {
-			ctx, _ := context.WithTimeout(context.Background(), timeout)
-			return withRetriesForRead(ctx, d, method)
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			return WithRetriesForRead(ctx, d, method)
 		}
 		if d.Id() != "" {
 			consistency_checker.DeleteConsistencyCheck(d.Id())
@@ -53,7 +57,7 @@ type callSdkFunc func() (*platformclientv2.APIResponse, diag.Diagnostics)
 
 // Retries up to 10 times while the shouldRetry condition returns true
 // Useful for adding custom retry logic to normally non-retryable error codes
-func retryWhen(shouldRetry checkResponseFunc, callSdk callSdkFunc, additionalCodes ...int) diag.Diagnostics {
+func RetryWhen(shouldRetry checkResponseFunc, callSdk callSdkFunc, additionalCodes ...int) diag.Diagnostics {
 	var lastErr diag.Diagnostics
 	for i := 0; i < 10; i++ {
 		resp, sdkErr := callSdk()
@@ -73,7 +77,7 @@ func retryWhen(shouldRetry checkResponseFunc, callSdk callSdkFunc, additionalCod
 	return diag.Errorf("Exhausted retries. Last error: %v", lastErr)
 }
 
-func isAdditionalCode(statusCode int, additionalCodes ...int) bool {
+func IsAdditionalCode(statusCode int, additionalCodes ...int) bool {
 	for _, additionalCode := range additionalCodes {
 		if statusCode == additionalCode {
 			return true
@@ -83,12 +87,12 @@ func isAdditionalCode(statusCode int, additionalCodes ...int) bool {
 	return false
 }
 
-func isVersionMismatch(resp *platformclientv2.APIResponse, additionalCodes ...int) bool {
+func IsVersionMismatch(resp *platformclientv2.APIResponse, additionalCodes ...int) bool {
 	// Version mismatch from directory may be a 409 or 400 with specific error message
 	if resp != nil {
 		if resp.StatusCode == http.StatusConflict ||
 			resp.StatusCode == http.StatusRequestTimeout ||
-			isAdditionalCode(resp.StatusCode, additionalCodes...) ||
+			IsAdditionalCode(resp.StatusCode, additionalCodes...) ||
 			(resp.StatusCode == http.StatusBadRequest && resp.Error != nil && strings.Contains((*resp.Error).Message, "does not match the current version")) {
 			return true
 		}
@@ -96,25 +100,44 @@ func isVersionMismatch(resp *platformclientv2.APIResponse, additionalCodes ...in
 	return false
 }
 
-func isStatus404(resp *platformclientv2.APIResponse, additionalCodes ...int) bool {
+func IsStatus404(resp *platformclientv2.APIResponse, additionalCodes ...int) bool {
 	if resp != nil {
 		if resp.StatusCode == http.StatusNotFound ||
 			resp.StatusCode == http.StatusRequestTimeout ||
 			resp.StatusCode == http.StatusGone ||
-			isAdditionalCode(resp.StatusCode, additionalCodes...) {
+			IsAdditionalCode(resp.StatusCode, additionalCodes...) {
 			return true
 		}
 	}
 	return false
 }
 
-func isStatus400(resp *platformclientv2.APIResponse, additionalCodes ...int) bool {
+func IsStatus404ByInt(respCode int, additionalCodes ...int) bool {
+
+	if respCode == http.StatusNotFound ||
+		respCode == http.StatusRequestTimeout ||
+		respCode == http.StatusGone ||
+		IsAdditionalCode(respCode, additionalCodes...) {
+		return true
+	}
+
+	return false
+}
+
+func IsStatus400(resp *platformclientv2.APIResponse, additionalCodes ...int) bool {
 	if resp != nil {
 		if resp.StatusCode == http.StatusBadRequest ||
 			resp.StatusCode == http.StatusRequestTimeout ||
-			isAdditionalCode(resp.StatusCode, additionalCodes...) {
+			IsAdditionalCode(resp.StatusCode, additionalCodes...) {
 			return true
 		}
 	}
 	return false
+}
+
+func GetBody(apiResponse *platformclientv2.APIResponse) string {
+	if apiResponse != nil {
+		return string(apiResponse.RawBody)
+	}
+	return ""
 }

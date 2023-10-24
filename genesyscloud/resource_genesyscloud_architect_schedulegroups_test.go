@@ -2,14 +2,15 @@ package genesyscloud
 
 import (
 	"fmt"
+	"log"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
-
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceArchitectScheduleGroups(t *testing.T) {
@@ -42,8 +43,8 @@ func TestAccResourceArchitectScheduleGroups(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
@@ -78,7 +79,7 @@ func TestAccResourceArchitectScheduleGroups(t *testing.T) {
 					resource.TestCheckResourceAttr("genesyscloud_architect_schedulegroups."+schedGroupResource1, "time_zone", time_zone),
 					resource.TestCheckResourceAttrPair("genesyscloud_architect_schedulegroups."+schedGroupResource1, "open_schedules_id.0", "genesyscloud_architect_schedules."+schedResource1, "id"),
 					resource.TestCheckResourceAttrPair("genesyscloud_architect_schedulegroups."+schedGroupResource1, "closed_schedules_id.0", "genesyscloud_architect_schedules."+schedResource2, "id"),
-					testDefaultHomeDivision("genesyscloud_architect_schedulegroups."+schedGroupResource1),
+					TestDefaultHomeDivision("genesyscloud_architect_schedulegroups."+schedGroupResource1),
 				),
 			},
 			{
@@ -124,7 +125,7 @@ func TestAccResourceArchitectScheduleGroups(t *testing.T) {
 					resource.TestCheckResourceAttrPair("genesyscloud_architect_schedulegroups."+schedGroupResource1, "open_schedules_id.0", "genesyscloud_architect_schedules."+schedResource1, "id"),
 					resource.TestCheckResourceAttrPair("genesyscloud_architect_schedulegroups."+schedGroupResource1, "closed_schedules_id.0", "genesyscloud_architect_schedules."+schedResource2, "id"),
 					resource.TestCheckResourceAttrPair("genesyscloud_architect_schedulegroups."+schedGroupResource1, "holiday_schedules_id.0", "genesyscloud_architect_schedules."+schedResource3, "id"),
-					testDefaultHomeDivision("genesyscloud_architect_schedulegroups."+schedGroupResource1),
+					TestDefaultHomeDivision("genesyscloud_architect_schedulegroups."+schedGroupResource1),
 				),
 			},
 			{
@@ -200,6 +201,33 @@ func generateSchedules(
 	`, propertyName, strings.Join(scheduleIds, ","))
 }
 
+func cleanupArchitectScheduleGroups(idPrefix string) {
+	architectApi := platformclientv2.NewArchitectApi()
+
+	for pageNum := 1; ; pageNum++ {
+		const pageSize = 100
+		architectScheduleGroups, _, getErr := architectApi.GetArchitectSchedulegroups(pageNum, pageSize, "", "", "", "", nil)
+		if getErr != nil {
+			return
+		}
+
+		if architectScheduleGroups.Entities == nil || len(*architectScheduleGroups.Entities) == 0 {
+			break
+		}
+
+		for _, scheduleGroup := range *architectScheduleGroups.Entities {
+			if scheduleGroup.Name != nil && strings.HasPrefix(*scheduleGroup.Name, idPrefix) {
+				_, delErr := architectApi.DeleteArchitectSchedulegroup(*scheduleGroup.Id)
+				if delErr != nil {
+					diag.Errorf("failed to delete architect schedule group %s (%s): %s", *scheduleGroup.Id, *scheduleGroup.Name, delErr)
+					return
+				}
+				log.Printf("Deleted architect schedule group %s (%s)", *scheduleGroup.Id, *scheduleGroup.Name)
+			}
+		}
+	}
+}
+
 func testVerifyScheduleGroupsDestroyed(state *terraform.State) error {
 	archAPI := platformclientv2.NewArchitectApi()
 	for _, rs := range state.RootModule().Resources {
@@ -210,7 +238,7 @@ func testVerifyScheduleGroupsDestroyed(state *terraform.State) error {
 		schedGroup, resp, err := archAPI.GetArchitectSchedulegroup(rs.Primary.ID)
 		if schedGroup != nil {
 			return fmt.Errorf("Schedule group (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Schedule group not found as expected
 			continue
 		} else {

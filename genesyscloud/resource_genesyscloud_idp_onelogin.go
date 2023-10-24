@@ -6,46 +6,50 @@ import (
 	"log"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func getAllIdpOnelogin(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
+func getAllIdpOnelogin(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(clientConfig)
-	resources := make(ResourceIDMetaMap)
+	resources := make(resourceExporter.ResourceIDMetaMap)
 
 	_, resp, getErr := idpAPI.GetIdentityprovidersOnelogin()
 	if getErr != nil {
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			// Don't export if config doesn't exist
 			return resources, nil
 		}
 		return nil, diag.Errorf("Failed to get IDP Onelogin: %v", getErr)
 	}
 
-	resources["0"] = &ResourceMeta{Name: "onelogin"}
+	resources["0"] = &resourceExporter.ResourceMeta{Name: "onelogin"}
 	return resources, nil
 }
 
-func idpOneloginExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllIdpOnelogin),
-		RefAttrs:         map[string]*RefAttrSettings{}, // No references
+func IdpOneloginExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllIdpOnelogin),
+		RefAttrs:         map[string]*resourceExporter.RefAttrSettings{}, // No references
 	}
 }
 
-func resourceIdpOnelogin() *schema.Resource {
+func ResourceIdpOnelogin() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Single Sign-on OneLogin Identity Provider. See this page for detailed configuration instructions: https://help.mypurecloud.com/articles/add-onelogin-as-single-sign-on-provider/",
 
-		CreateContext: createWithPooledClient(createIdpOnelogin),
-		ReadContext:   readWithPooledClient(readIdpOnelogin),
-		UpdateContext: updateWithPooledClient(updateIdpOnelogin),
-		DeleteContext: deleteWithPooledClient(deleteIdpOnelogin),
+		CreateContext: CreateWithPooledClient(createIdpOnelogin),
+		ReadContext:   ReadWithPooledClient(readIdpOnelogin),
+		UpdateContext: UpdateWithPooledClient(updateIdpOnelogin),
+		DeleteContext: DeleteWithPooledClient(deleteIdpOnelogin),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -57,7 +61,7 @@ func resourceIdpOnelogin() *schema.Resource {
 		Schema: map[string]*schema.Schema{
 			"certificates": {
 				Description: "PEM or DER encoded public X.509 certificates for SAML signature validation.",
-				Type:        schema.TypeSet,
+				Type:        schema.TypeList,
 				Required:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
@@ -88,26 +92,26 @@ func createIdpOnelogin(ctx context.Context, d *schema.ResourceData, meta interfa
 }
 
 func readIdpOnelogin(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(sdkConfig)
 
 	log.Printf("Reading IDP Onelogin")
 
-	return withRetriesForReadCustomTimeout(ctx, d.Timeout(schema.TimeoutRead), d, func() *resource.RetryError {
+	return WithRetriesForReadCustomTimeout(ctx, d.Timeout(schema.TimeoutRead), d, func() *retry.RetryError {
 		onelogin, resp, getErr := idpAPI.GetIdentityprovidersOnelogin()
 		if getErr != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				createIdpOkta(ctx, d, meta)
-				return resource.RetryableError(fmt.Errorf("Failed to read IDP Onelogin: %s", getErr))
+				return retry.RetryableError(fmt.Errorf("Failed to read IDP Onelogin: %s", getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read IDP Onelogin: %s", getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read IDP Onelogin: %s", getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceIdpOnelogin())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceIdpOnelogin())
 		if onelogin.Certificate != nil {
-			d.Set("certificates", stringListToSet([]string{*onelogin.Certificate}))
+			d.Set("certificates", lists.StringListToInterfaceList([]string{*onelogin.Certificate}))
 		} else if onelogin.Certificates != nil {
-			d.Set("certificates", stringListToSet(*onelogin.Certificates))
+			d.Set("certificates", lists.StringListToInterfaceList(*onelogin.Certificates))
 		} else {
 			d.Set("certificates", nil)
 		}
@@ -140,7 +144,7 @@ func updateIdpOnelogin(ctx context.Context, d *schema.ResourceData, meta interfa
 	targetUri := d.Get("target_uri").(string)
 	disabled := d.Get("disabled").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(sdkConfig)
 
 	log.Printf("Updating IDP Onelogin")
@@ -150,13 +154,12 @@ func updateIdpOnelogin(ctx context.Context, d *schema.ResourceData, meta interfa
 		Disabled:     &disabled,
 	}
 
-	certificates := buildSdkStringList(d, "certificates")
+	certificates := lists.BuildSdkStringListFromInterfaceArray(d, "certificates")
 	if certificates != nil {
 		if len(*certificates) == 1 {
 			update.Certificate = &(*certificates)[0]
-		} else {
-			update.Certificates = certificates
 		}
+		update.Certificates = certificates
 	}
 
 	_, _, err := idpAPI.PutIdentityprovidersOnelogin(update)
@@ -169,7 +172,7 @@ func updateIdpOnelogin(ctx context.Context, d *schema.ResourceData, meta interfa
 }
 
 func deleteIdpOnelogin(ctx context.Context, _ *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting IDP Onelogin")
@@ -178,16 +181,16 @@ func deleteIdpOnelogin(ctx context.Context, _ *schema.ResourceData, meta interfa
 		return diag.Errorf("Failed to delete IDP Onelogin: %s", err)
 	}
 
-	return withRetries(ctx, 60*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 60*time.Second, func() *retry.RetryError {
 		_, resp, err := idpAPI.GetIdentityprovidersOnelogin()
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// IDP Onelogin deleted
 				log.Printf("Deleted IDP Onelogin")
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting IDP Onelogin: %s", err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting IDP Onelogin: %s", err))
 		}
-		return resource.RetryableError(fmt.Errorf("IDP Onelogin still exists"))
+		return retry.RetryableError(fmt.Errorf("IDP Onelogin still exists"))
 	})
 }

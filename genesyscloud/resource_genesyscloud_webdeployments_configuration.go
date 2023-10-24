@@ -5,16 +5,21 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 	"time"
 
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 var (
@@ -39,6 +44,23 @@ var (
 					"Off",
 					"OnDemand",
 				}, false),
+			},
+		},
+	}
+
+	homeScreen = &schema.Resource{
+		Schema: map[string]*schema.Schema{
+			"enabled": {
+				Description: "Whether or not home screen is enabled",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Computed:    true,
+			},
+			"logo_url": {
+				Description: "URL for custom logo to appear in home screen",
+				Type:        schema.TypeString,
+				Optional:    true,
+				Computed:    true,
 			},
 		},
 	}
@@ -77,7 +99,7 @@ var (
 				Description: "Whether or not messenger is enabled",
 				Type:        schema.TypeBool,
 				Optional:    true,
-				Default:     true,
+				Computed:    true,
 			},
 			"styles": {
 				Description: "The style settings for messenger",
@@ -93,12 +115,57 @@ var (
 				Optional:    true,
 				Elem:        launcherButtonSettings,
 			},
+			"home_screen": {
+				Description: "The settings for the home screen",
+				Type:        schema.TypeList,
+				MaxItems:    1,
+				Optional:    true,
+				Elem:        homeScreen,
+			},
 			"file_upload": {
 				Description: "File upload settings for messenger",
 				Type:        schema.TypeList,
 				MaxItems:    1,
 				Optional:    true,
 				Elem:        fileUploadSettings,
+			},
+		},
+	}
+
+	cobrowseSettings = &schema.Resource{
+		Schema: map[string]*schema.Schema{
+			"enabled": {
+				Description: "Whether or not cobrowse is enabled",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Computed:    true,
+			},
+			"allow_agent_control": {
+				Description: "Whether agent can take control over customer's screen or not",
+				Type:        schema.TypeBool,
+				Optional:    true,
+				Computed:    true,
+			},
+			"channels": {
+				Description: "List of channels through which cobrowse is available (for now only Webmessaging and Voice)",
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem: &schema.Schema{
+					Type:         schema.TypeString,
+					ValidateFunc: validation.StringInSlice([]string{"Webmessaging", "Voice"}, false),
+				},
+			},
+			"mask_selectors": {
+				Description: "List of CSS selectors which should be masked when screen sharing is active",
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+			},
+			"readonly_selectors": {
+				Description: "List of CSS selectors which should be read-only when screen sharing is active",
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
 		},
 	}
@@ -244,8 +311,8 @@ var (
 	}
 )
 
-func getAllWebDeploymentConfigurations(ctx context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllWebDeploymentConfigurations(ctx context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	webDeploymentsAPI := platformclientv2.NewWebDeploymentsApiWithConfig(clientConfig)
 
 	configurations, _, getErr := webDeploymentsAPI.GetWebdeploymentsConfigurations(false)
@@ -254,26 +321,27 @@ func getAllWebDeploymentConfigurations(ctx context.Context, clientConfig *platfo
 	}
 
 	for _, configuration := range *configurations.Entities {
-		resources[*configuration.Id] = &ResourceMeta{Name: *configuration.Name}
+		resources[*configuration.Id] = &resourceExporter.ResourceMeta{Name: *configuration.Name}
 	}
 
 	return resources, nil
 }
 
-func webDeploymentConfigurationExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllWebDeploymentConfigurations),
+func WebDeploymentConfigurationExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc:   GetAllWithPooledClient(getAllWebDeploymentConfigurations),
+		ExcludedAttributes: []string{"version"},
 	}
 }
 
-func resourceWebDeploymentConfiguration() *schema.Resource {
+func ResourceWebDeploymentConfiguration() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Web Deployment Configuration",
 
-		CreateContext: createWithPooledClient(createWebDeploymentConfiguration),
-		ReadContext:   readWithPooledClient(readWebDeploymentConfiguration),
-		UpdateContext: updateWithPooledClient(updateWebDeploymentConfiguration),
-		DeleteContext: deleteWithPooledClient(deleteWebDeploymentConfiguration),
+		CreateContext: CreateWithPooledClient(createWebDeploymentConfiguration),
+		ReadContext:   ReadWithPooledClient(readWebDeploymentConfiguration),
+		UpdateContext: UpdateWithPooledClient(updateWebDeploymentConfiguration),
+		DeleteContext: DeleteWithPooledClient(deleteWebDeploymentConfiguration),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -293,13 +361,14 @@ func resourceWebDeploymentConfiguration() *schema.Resource {
 			"languages": {
 				Description: "A list of languages supported on the configuration.",
 				Type:        schema.TypeList,
-				Optional:    true,
+				Required:    true,
+				MinItems:    1,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
 			"default_language": {
 				Description: "The default language to use for the configuration.",
 				Type:        schema.TypeString,
-				Optional:    true,
+				Required:    true,
 			},
 			"status": {
 				Description: "The current status of the deployment. Valid values: Pending, Active, Inactive, Error, Deleting.",
@@ -319,7 +388,7 @@ func resourceWebDeploymentConfiguration() *schema.Resource {
 				Description: "The version of the configuration.",
 				Type:        schema.TypeString,
 				Computed:    true,
-				Optional:    true,
+				MaxItems:    0,
 			},
 			"messenger": {
 				Description: "Settings concerning messenger",
@@ -327,6 +396,13 @@ func resourceWebDeploymentConfiguration() *schema.Resource {
 				MaxItems:    1,
 				Optional:    true,
 				Elem:        messengerSettings,
+			},
+			"cobrowse": {
+				Description: "Settings concerning cobrowse",
+				Type:        schema.TypeList,
+				MaxItems:    1,
+				Optional:    true,
+				Elem:        cobrowseSettings,
 			},
 			"journey_events": {
 				Description: "Settings concerning journey events",
@@ -350,26 +426,26 @@ func customizeConfigurationDiff(ctx context.Context, diff *schema.ResourceDiff, 
 }
 
 func waitForConfigurationDraftToBeActive(ctx context.Context, api *platformclientv2.WebDeploymentsApi, id string) diag.Diagnostics {
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		configuration, resp, err := api.GetWebdeploymentsConfigurationVersionsDraft(id)
 		if err != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Error verifying active status for new web deployment configuration %s: %s", id, err))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Error verifying active status for new web deployment configuration %s: %s", id, err))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error verifying active status for new web deployment configuration %s: %s", id, err))
+			return retry.NonRetryableError(fmt.Errorf("Error verifying active status for new web deployment configuration %s: %s", id, err))
 		}
 
 		if *configuration.Status == "Active" {
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("Web deployment configuration %s not active yet. Status: %s", id, *configuration.Status))
+		return retry.RetryableError(fmt.Errorf("Web deployment configuration %s not active yet. Status: %s", id, *configuration.Status))
 	})
 }
 
 func readWebDeploymentConfigurationFromResourceData(d *schema.ResourceData) (string, *platformclientv2.Webdeploymentconfigurationversion) {
 	name := d.Get("name").(string)
-	languages := interfaceListToStrings(d.Get("languages").([]interface{}))
+	languages := lists.InterfaceListToStrings(d.Get("languages").([]interface{}))
 	defaultLanguage := d.Get("default_language").(string)
 
 	inputCfg := &platformclientv2.Webdeploymentconfigurationversion{
@@ -386,6 +462,11 @@ func readWebDeploymentConfigurationFromResourceData(d *schema.ResourceData) (str
 	messengerSettings := readMessengerSettings(d)
 	if messengerSettings != nil {
 		inputCfg.Messenger = messengerSettings
+	}
+
+	cobrowseSettings := readCobrowseSettings(d)
+	if cobrowseSettings != nil {
+		inputCfg.Cobrowse = cobrowseSettings
 	}
 
 	journeySettings := readJourneySettings(d)
@@ -408,20 +489,19 @@ func readJourneySettings(d *schema.ResourceData) *platformclientv2.Journeyevents
 	}
 
 	cfg := cfgs[0].(map[string]interface{})
-	log.Println("Processing journey events config: ", cfg)
 	enabled, _ := cfg["enabled"].(bool)
 	journeySettings := &platformclientv2.Journeyeventssettings{
 		Enabled: &enabled,
 	}
 
-	excludedQueryParams := interfaceListToStrings(cfg["excluded_query_parameters"].([]interface{}))
+	excludedQueryParams := lists.InterfaceListToStrings(cfg["excluded_query_parameters"].([]interface{}))
 	journeySettings.ExcludedQueryParameters = &excludedQueryParams
 
 	if keepUrlFragment, ok := cfg["should_keep_url_fragment"].(bool); ok && keepUrlFragment {
 		journeySettings.ShouldKeepUrlFragment = &keepUrlFragment
 	}
 
-	searchQueryParameters := interfaceListToStrings(cfg["search_query_parameters"].([]interface{}))
+	searchQueryParameters := lists.InterfaceListToStrings(cfg["search_query_parameters"].([]interface{}))
 	journeySettings.SearchQueryParameters = &searchQueryParameters
 
 	pageviewConfig := cfg["pageview_config"]
@@ -573,6 +653,20 @@ func readMessengerSettings(d *schema.ResourceData) *platformclientv2.Messengerse
 		}
 	}
 
+	if screens, ok := cfg["home_screen"].([]interface{}); ok && len(screens) > 0 {
+		if screen, ok := screens[0].(map[string]interface{}); ok {
+			enabled, enabledOk := screen["enabled"].(bool)
+			logoUrl, logoUrlOk := screen["logo_url"].(string)
+
+			if enabledOk && logoUrlOk {
+				messengerSettings.HomeScreen = &platformclientv2.Messengerhomescreen{
+					Enabled: &enabled,
+					LogoUrl: &logoUrl,
+				}
+			}
+		}
+	}
+
 	if fileUploads, ok := cfg["file_upload"].([]interface{}); ok && len(fileUploads) > 0 {
 		fileUpload := fileUploads[0].(map[string]interface{})
 		if modesCfg, ok := fileUpload["mode"].([]interface{}); ok && len(modesCfg) > 0 {
@@ -580,7 +674,7 @@ func readMessengerSettings(d *schema.ResourceData) *platformclientv2.Messengerse
 			for i, modeCfg := range modesCfg {
 				if mode, ok := modeCfg.(map[string]interface{}); ok {
 					maxFileSize := mode["max_file_size_kb"].(int)
-					fileTypes := interfaceListToStrings(mode["file_types"].([]interface{}))
+					fileTypes := lists.InterfaceListToStrings(mode["file_types"].([]interface{}))
 					modes[i] = platformclientv2.Fileuploadmode{
 						FileTypes:     &fileTypes,
 						MaxFileSizeKB: &maxFileSize,
@@ -599,21 +693,72 @@ func readMessengerSettings(d *schema.ResourceData) *platformclientv2.Messengerse
 	return messengerSettings
 }
 
+func readCobrowseSettings(d *schema.ResourceData) *platformclientv2.Cobrowsesettings {
+	value, ok := d.GetOk("cobrowse")
+	if !ok {
+		return nil
+	}
+
+	cfgs := value.([]interface{})
+	if len(cfgs) < 1 {
+		return nil
+	}
+
+	cfg := cfgs[0].(map[string]interface{})
+
+	enabled, _ := cfg["enabled"].(bool)
+	allowAgentControl, _ := cfg["allow_agent_control"].(bool)
+	channels := lists.InterfaceListToStrings(cfg["channels"].([]interface{}))
+	maskSelectors := lists.InterfaceListToStrings(cfg["mask_selectors"].([]interface{}))
+	readonlySelectors := lists.InterfaceListToStrings(cfg["readonly_selectors"].([]interface{}))
+
+	return &platformclientv2.Cobrowsesettings{
+		Enabled:           &enabled,
+		AllowAgentControl: &allowAgentControl,
+		Channels:          &channels,
+		MaskSelectors:     &maskSelectors,
+		ReadonlySelectors: &readonlySelectors,
+	}
+}
+
+// featureNotImplemented checks the response object to find out if the request failed because a feature is not yet
+// implemented in the org that it was ran against. If true, we can pass back the field name and give more context
+// in the final error message.
+func featureNotImplemented(response *platformclientv2.APIResponse) (bool, string) {
+	if response.Error == nil || response.Error.Details == nil || len(response.Error.Details) == 0 {
+		return false, ""
+	}
+	for _, err := range response.Error.Details {
+		if err.FieldName == nil {
+			continue
+		}
+		if strings.Contains(*err.ErrorCode, "feature is not yet implemented") {
+			return true, *err.FieldName
+		}
+	}
+	return false, ""
+}
+
 func createWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name, inputCfg := readWebDeploymentConfigurationFromResourceData(d)
 
 	log.Printf("Creating web deployment configuration %s", name)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	api := platformclientv2.NewWebDeploymentsApiWithConfig(sdkConfig)
 
-	diagErr := withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	diagErr := WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		configuration, resp, err := api.PostWebdeploymentsConfigurations(*inputCfg)
 		if err != nil {
-			if isStatus400(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to create web deployment configuration %s: %s", name, err))
+			var extraErrorInfo string
+			featureIsNotImplemented, fieldName := featureNotImplemented(resp)
+			if featureIsNotImplemented {
+				extraErrorInfo = fmt.Sprintf("Feature '%s' is not yet implemented", fieldName)
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to create web deployment configuration %s: %s", name, err))
+			if IsStatus400(resp) {
+				return retry.RetryableError(fmt.Errorf("failed to create web deployment configuration %s: %s. %s", name, err, extraErrorInfo))
+			}
+			return retry.NonRetryableError(fmt.Errorf("failed to create web deployment configuration %s: %s. %s", name, err, extraErrorInfo))
 		}
 		d.SetId(*configuration.Id)
 		d.Set("status", configuration.Status)
@@ -629,13 +774,13 @@ func createWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceDat
 		return diag.Errorf("Web deployment configuration %s did not become active and could not be published", name)
 	}
 
-	diagErr = withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	diagErr = WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		configuration, resp, err := api.PostWebdeploymentsConfigurationVersionsDraftPublish(d.Id())
 		if err != nil {
-			if isStatus400(resp) {
-				return resource.RetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
+			if IsStatus400(resp) {
+				return retry.RetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
+			return retry.NonRetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
 		}
 		d.Set("version", configuration.Version)
 		d.Set("status", configuration.Status)
@@ -652,20 +797,21 @@ func createWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceDat
 
 func determineLatestVersion(ctx context.Context, api *platformclientv2.WebDeploymentsApi, configurationId string) string {
 	version := ""
-	_ = withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	draft := "DRAFT"
+	_ = WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		versions, resp, getErr := api.GetWebdeploymentsConfigurationVersions(configurationId)
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to determine latest version %s", getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to determine latest version %s", getErr))
 			}
 			log.Printf("Failed to determine latest version. Defaulting to DRAFT. Details: %s", getErr)
-			version = "draft"
-			return resource.NonRetryableError(fmt.Errorf("Failed to determine latest version %s", getErr))
+			version = draft
+			return retry.NonRetryableError(fmt.Errorf("Failed to determine latest version %s", getErr))
 		}
 
 		maxVersion := 0
 		for _, v := range *versions.Entities {
-			if *v.Version == "DRAFT" {
+			if *v.Version == draft {
 				continue
 			}
 			APIVersion, err := strconv.Atoi(*v.Version)
@@ -679,10 +825,10 @@ func determineLatestVersion(ctx context.Context, api *platformclientv2.WebDeploy
 		}
 
 		if maxVersion == 0 {
-			version = "draft"
+			version = draft
+		} else {
+			version = strconv.Itoa(maxVersion)
 		}
-
-		version = strconv.Itoa(maxVersion)
 
 		return nil
 	})
@@ -691,24 +837,24 @@ func determineLatestVersion(ctx context.Context, api *platformclientv2.WebDeploy
 }
 
 func readWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	api := platformclientv2.NewWebDeploymentsApiWithConfig(sdkConfig)
 
 	version := d.Get("version").(string)
 	log.Printf("Reading web deployment configuration %s", d.Id())
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		if version == "" {
 			version = determineLatestVersion(ctx, api, d.Id())
 		}
 		configuration, resp, getErr := api.GetWebdeploymentsConfigurationVersion(d.Id(), version)
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read web deployment configuration %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read web deployment configuration %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read web deployment configuration %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read web deployment configuration %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceWebDeploymentConfiguration())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceWebDeploymentConfiguration())
 		d.Set("name", *configuration.Name)
 		if configuration.Description != nil {
 			d.Set("description", *configuration.Description)
@@ -728,6 +874,9 @@ func readWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceData,
 		if configuration.Messenger != nil {
 			d.Set("messenger", flattenMessengerSettings(configuration.Messenger))
 		}
+		if configuration.Cobrowse != nil {
+			d.Set("cobrowse", flattenCobrowseSettings(configuration.Cobrowse))
+		}
 		if configuration.JourneyEvents != nil {
 			d.Set("journey_events", flattenJourneyEvents(configuration.JourneyEvents))
 		}
@@ -742,16 +891,16 @@ func updateWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceDat
 
 	log.Printf("Updating web deployment configuration %s", name)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	api := platformclientv2.NewWebDeploymentsApiWithConfig(sdkConfig)
 
-	diagErr := withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	diagErr := WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, resp, err := api.PutWebdeploymentsConfigurationVersionsDraft(d.Id(), *inputCfg)
 		if err != nil {
-			if isStatus400(resp) {
-				return resource.RetryableError(fmt.Errorf("Error updating web deployment configuration %s: %s", name, err))
+			if IsStatus400(resp) {
+				return retry.RetryableError(fmt.Errorf("Error updating web deployment configuration %s: %s", name, err))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error updating web deployment configuration %s: %s", name, err))
+			return retry.NonRetryableError(fmt.Errorf("Error updating web deployment configuration %s: %s", name, err))
 		}
 		return nil
 	})
@@ -764,13 +913,13 @@ func updateWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceDat
 		return diag.Errorf("Web deployment configuration %s did not become active and could not be published", name)
 	}
 
-	diagErr = withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	diagErr = WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		configuration, resp, err := api.PostWebdeploymentsConfigurationVersionsDraftPublish(d.Id())
 		if err != nil {
-			if isStatus400(resp) {
-				return resource.RetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
+			if IsStatus400(resp) {
+				return retry.RetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
+			return retry.NonRetryableError(fmt.Errorf("Error publishing web deployment configuration %s: %s", name, err))
 		}
 		d.Set("version", configuration.Version)
 		d.Set("status", configuration.Status)
@@ -787,7 +936,7 @@ func updateWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceDat
 func deleteWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	api := platformclientv2.NewWebDeploymentsApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting web deployment configuration %s", name)
@@ -797,17 +946,17 @@ func deleteWebDeploymentConfiguration(ctx context.Context, d *schema.ResourceDat
 		return diag.Errorf("Failed to delete web deployment configuration %s: %s", name, err)
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, resp, err := api.GetWebdeploymentsConfigurationVersionsDraft(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				log.Printf("Deleted web deployment configuration %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting web deployment configuration %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting web deployment configuration %s: %s", d.Id(), err))
 		}
 
-		return resource.RetryableError(fmt.Errorf("Web deployment configuration %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Web deployment configuration %s still exists", d.Id()))
 	})
 }
 
@@ -826,7 +975,22 @@ func flattenMessengerSettings(messengerSettings *platformclientv2.Messengersetti
 		"enabled":         messengerSettings.Enabled,
 		"styles":          flattenStyles(messengerSettings.Styles),
 		"launcher_button": flattenLauncherButton(messengerSettings.LauncherButton),
+		"home_screen":     flattenHomeScreen(messengerSettings.HomeScreen),
 		"file_upload":     flattenFileUpload(messengerSettings.FileUpload),
+	}}
+}
+
+func flattenCobrowseSettings(cobrowseSettings *platformclientv2.Cobrowsesettings) []interface{} {
+	if cobrowseSettings == nil {
+		return nil
+	}
+
+	return []interface{}{map[string]interface{}{
+		"enabled":             cobrowseSettings.Enabled,
+		"allow_agent_control": cobrowseSettings.AllowAgentControl,
+		"channels":            cobrowseSettings.Channels,
+		"mask_selectors":      cobrowseSettings.MaskSelectors,
+		"readonly_selectors":  cobrowseSettings.ReadonlySelectors,
 	}}
 }
 
@@ -847,6 +1011,17 @@ func flattenLauncherButton(settings *platformclientv2.Launcherbuttonsettings) []
 
 	return []interface{}{map[string]interface{}{
 		"visibility": settings.Visibility,
+	}}
+}
+
+func flattenHomeScreen(settings *platformclientv2.Messengerhomescreen) []interface{} {
+	if settings == nil {
+		return nil
+	}
+
+	return []interface{}{map[string]interface{}{
+		"enabled":  settings.Enabled,
+		"logo_url": settings.LogoUrl,
 	}}
 }
 

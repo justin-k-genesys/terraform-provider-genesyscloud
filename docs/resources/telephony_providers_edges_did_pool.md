@@ -21,12 +21,12 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_telephony_providers_edges_did_pool" "test_did_pool" {
+resource "genesyscloud_telephony_providers_edges_did_pool" "example_did_pool" {
   start_phone_number = "+13175550000"
   end_phone_number   = "+13175550000"
   description        = "Description of the DID range"
   comments           = "Additional comments"
-  provider           = "PURE_CLOUD"
+  pool_provider      = "PURE_CLOUD"
 }
 ```
 
@@ -35,8 +35,8 @@ resource "genesyscloud_telephony_providers_edges_did_pool" "test_did_pool" {
 
 ### Required
 
-- `end_phone_number` (String) Ending phone number of the DID Pool range.
-- `start_phone_number` (String) Starting phone number of the DID Pool range.
+- `end_phone_number` (String) Ending phone number of the DID Pool range.  Phone number must be in an E.164 number format. Changing the end_phone_number attribute will cause the did_pool object to be dropped and recreated with a new ID.
+- `start_phone_number` (String) Starting phone number of the DID Pool range. Phone number must be in a E.164 number format. Changing the start_phone_number attribute will cause the did_pool object to be dropped and recreated with a new ID.
 
 ### Optional
 

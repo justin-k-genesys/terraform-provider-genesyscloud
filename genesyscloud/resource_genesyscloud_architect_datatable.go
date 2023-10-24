@@ -11,13 +11,16 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 var (
@@ -48,8 +51,8 @@ var (
 	}
 )
 
-func getAllArchitectDatatables(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllArchitectDatatables(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	archAPI := platformclientv2.NewArchitectApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -64,30 +67,30 @@ func getAllArchitectDatatables(_ context.Context, clientConfig *platformclientv2
 		}
 
 		for _, table := range *tables.Entities {
-			resources[*table.Id] = &ResourceMeta{Name: *table.Name}
+			resources[*table.Id] = &resourceExporter.ResourceMeta{Name: *table.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func architectDatatableExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllArchitectDatatables),
-		RefAttrs: map[string]*RefAttrSettings{
+func ArchitectDatatableExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllArchitectDatatables),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"division_id": {RefType: "genesyscloud_auth_division"},
 		},
 	}
 }
 
-func resourceArchitectDatatable() *schema.Resource {
+func ResourceArchitectDatatable() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Architect Datatables",
 
-		CreateContext: createWithPooledClient(createArchitectDatatable),
-		ReadContext:   readWithPooledClient(readArchitectDatatable),
-		UpdateContext: updateWithPooledClient(updateArchitectDatatable),
-		DeleteContext: deleteWithPooledClient(deleteArchitectDatatable),
+		CreateContext: CreateWithPooledClient(createArchitectDatatable),
+		ReadContext:   ReadWithPooledClient(readArchitectDatatable),
+		UpdateContext: UpdateWithPooledClient(updateArchitectDatatable),
+		DeleteContext: DeleteWithPooledClient(deleteArchitectDatatable),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -125,7 +128,7 @@ func createArchitectDatatable(ctx context.Context, d *schema.ResourceData, meta 
 	divisionID := d.Get("division_id").(string)
 	description := d.Get("description").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Creating datatable %s", name)
@@ -160,20 +163,20 @@ func createArchitectDatatable(ctx context.Context, d *schema.ResourceData, meta 
 }
 
 func readArchitectDatatable(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Reading datatable %s", d.Id())
 
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		datatable, resp, getErr := sdkGetArchitectDatatable(d.Id(), "schema", archAPI)
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read datatable %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read datatable %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read datatable %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read datatable %s: %s", d.Id(), getErr))
 		}
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceArchitectDatatable())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceArchitectDatatable())
 		d.Set("name", *datatable.Name)
 		d.Set("division_id", *datatable.Division.Id)
 
@@ -201,7 +204,7 @@ func updateArchitectDatatable(ctx context.Context, d *schema.ResourceData, meta 
 	divisionID := d.Get("division_id").(string)
 	description := d.Get("description").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Updating datatable %s", name)
@@ -237,7 +240,7 @@ func updateArchitectDatatable(ctx context.Context, d *schema.ResourceData, meta 
 func deleteArchitectDatatable(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting datatable %s", name)
@@ -246,17 +249,17 @@ func deleteArchitectDatatable(ctx context.Context, d *schema.ResourceData, meta 
 		return diag.Errorf("Failed to delete datatable %s: %s", name, err)
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		_, resp, err := archAPI.GetFlowsDatatable(d.Id(), "")
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// Datatable row deleted
 				log.Printf("Deleted datatable row %s", name)
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting datatable row %s: %s", name, err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting datatable row %s: %s", name, err))
 		}
-		return resource.RetryableError(fmt.Errorf("Datatable row %s still exists", name))
+		return retry.RetryableError(fmt.Errorf("Datatable row %s still exists", name))
 	})
 }
 

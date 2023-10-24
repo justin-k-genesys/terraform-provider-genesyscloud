@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceTrunkBaseSettings(t *testing.T) {
@@ -26,11 +26,11 @@ func TestAccResourceTrunkBaseSettings(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
-				Config: generateTrunkBaseSettingsResourceWithCustomAttrs(
+				Config: GenerateTrunkBaseSettingsResourceWithCustomAttrs(
 					trunkBaseSettingsRes,
 					name1,
 					description1,
@@ -59,7 +59,7 @@ func TestAccResourceTrunkBaseSettings(t *testing.T) {
 			},
 			// Update with new name, description and properties
 			{
-				Config: generateTrunkBaseSettingsResourceWithCustomAttrs(
+				Config: GenerateTrunkBaseSettingsResourceWithCustomAttrs(
 					trunkBaseSettingsRes,
 					name2,
 					description2,
@@ -106,7 +106,7 @@ func testVerifyTrunkBaseSettingsDestroyed(state *terraform.State) error {
 		trunkBaseSettings, resp, err := edgesAPI.GetTelephonyProvidersEdgesTrunkbasesetting(rs.Primary.ID, true)
 		if trunkBaseSettings != nil {
 			return fmt.Errorf("TrunkBaseSettings (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// TrunkBaseSettings not found as expected
 			continue
 		} else {
@@ -118,57 +118,38 @@ func testVerifyTrunkBaseSettingsDestroyed(state *terraform.State) error {
 	return nil
 }
 
-func generateTrunkBaseSettingsResourceWithCustomAttrs(
-	trunkBaseSettingsRes,
-	name,
-	description,
-	trunkMetaBaseId,
-	trunkType string,
-	managed bool,
-	otherAttrs ...string) string {
-	return fmt.Sprintf(`resource "genesyscloud_telephony_providers_edges_trunkbasesettings" "%s" {
-		name = "%s"
-		description = "%s"
-		trunk_meta_base_id = "%s"
-		trunk_type = "%s"
-		managed = %v
-		%s
-	}
-	`, trunkBaseSettingsRes, name, description, trunkMetaBaseId, trunkType, managed, strings.Join(otherAttrs, "\n"))
-}
-
 func generateTrunkBaseSettingsProperties(settingsName, trunkMaxDialTimeout, trunkTransportSipDscpValue, trunkMediaDisconnectOnIdleRtp string, trunkMediaCodec []string) string {
 	// A random selection of properties
-	return "properties = " + generateJsonEncodedProperties(
-		generateJsonProperty(
-			"trunk_label", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", strconv.Quote(settingsName)),
+	return "properties = " + GenerateJsonEncodedProperties(
+		GenerateJsonProperty(
+			"trunk_label", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", strconv.Quote(settingsName)),
 					)))),
-		generateJsonProperty(
-			"trunk_max_dial_timeout", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", strconv.Quote(trunkMaxDialTimeout)),
+		GenerateJsonProperty(
+			"trunk_max_dial_timeout", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", strconv.Quote(trunkMaxDialTimeout)),
 					)))),
-		generateJsonProperty(
-			"trunk_transport_sip_dscp_value", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", trunkTransportSipDscpValue),
+		GenerateJsonProperty(
+			"trunk_transport_sip_dscp_value", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", trunkTransportSipDscpValue),
 					)))),
-		generateJsonProperty(
-			"trunk_media_disconnect_on_idle_rtp", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonProperty("instance", trunkMediaDisconnectOnIdleRtp),
+		GenerateJsonProperty(
+			"trunk_media_disconnect_on_idle_rtp", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonProperty("instance", trunkMediaDisconnectOnIdleRtp),
 					)))),
-		generateJsonProperty(
-			"trunk_media_codec", generateJsonObject(
-				generateJsonProperty(
-					"value", generateJsonObject(
-						generateJsonArrayProperty("instance", strings.Join(trunkMediaCodec, ",")),
+		GenerateJsonProperty(
+			"trunk_media_codec", GenerateJsonObject(
+				GenerateJsonProperty(
+					"value", GenerateJsonObject(
+						GenerateJsonArrayProperty("instance", strings.Join(trunkMediaCodec, ",")),
 					)))),
 	)
 }

@@ -53,7 +53,7 @@ resource "genesyscloud_auth_role" "agent_role" {
 
 ### Optional
 
-- `default_role_id` (String) Internal ID for an existing default role, e.g. 'employee'. This can be set to manage permissions on existing default roles.
+- `default_role_id` (String) Internal ID for an existing default role, e.g. 'employee'. This can be set to manage permissions on existing default roles.  Note: Changing the default_role_id attribute will cause this auth_role to be dropped and recreated with a new ID.
 - `description` (String) Role description.
 - `permission_policies` (Block Set) Role permission policies. (see [below for nested schema](#nestedblock--permission_policies))
 - `permissions` (Set of String) General role permissions. e.g. 'group_creation'
@@ -93,7 +93,7 @@ Required:
 - `variable_name` (String) Variable name being compared. This varies depending on the permission.
 
 <a id="nestedblock--permission_policies--conditions--terms--operands"></a>
-### Nested Schema for `permission_policies.conditions.terms.variable_name`
+### Nested Schema for `permission_policies.conditions.terms.operands`
 
 Required:
 

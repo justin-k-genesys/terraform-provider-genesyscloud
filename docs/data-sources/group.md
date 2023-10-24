@@ -14,7 +14,7 @@ Data source for Genesys Cloud Groups. Select a group by name.
 
 ```terraform
 data "genesyscloud_group" "group" {
-  name = "test group name"
+  name = "example group name"
 }
 ```
 
@@ -28,5 +28,3 @@ data "genesyscloud_group" "group" {
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-
-

@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceRoutingWrapupcode(t *testing.T) {
@@ -18,12 +18,12 @@ func TestAccResourceRoutingWrapupcode(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
-				Config: generateRoutingWrapupcodeResource(
+				Config: GenerateRoutingWrapupcodeResource(
 					codeResource1,
 					codeName1,
 				),
@@ -33,7 +33,7 @@ func TestAccResourceRoutingWrapupcode(t *testing.T) {
 			},
 			{
 				// Update with a new name
-				Config: generateRoutingWrapupcodeResource(
+				Config: GenerateRoutingWrapupcodeResource(
 					codeResource1,
 					codeName2,
 				),
@@ -52,15 +52,6 @@ func TestAccResourceRoutingWrapupcode(t *testing.T) {
 	})
 }
 
-func generateRoutingWrapupcodeResource(
-	resourceID string,
-	name string) string {
-	return fmt.Sprintf(`resource "genesyscloud_routing_wrapupcode" "%s" {
-		name = "%s"
-	}
-	`, resourceID, name)
-}
-
 func testVerifyWrapupcodesDestroyed(state *terraform.State) error {
 	routingAPI := platformclientv2.NewRoutingApi()
 	for _, rs := range state.RootModule().Resources {
@@ -71,7 +62,7 @@ func testVerifyWrapupcodesDestroyed(state *terraform.State) error {
 		wrapupcode, resp, err := routingAPI.GetRoutingWrapupcode(rs.Primary.ID)
 		if wrapupcode != nil {
 			return fmt.Errorf("Wrapupcode (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Wrapupcode not found as expected
 			continue
 		} else {

@@ -20,7 +20,7 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_location" "hq1" {
+resource "genesyscloud_location" "hq" {
   name  = "Indy"
   notes = "Main Indy Office"
   address {
@@ -76,7 +76,7 @@ Optional:
 
 Required:
 
-- `number` (String) Emergency phone number.
+- `number` (String) Emergency phone number.  Must be in an E.164 number format.
 
 Optional:
 

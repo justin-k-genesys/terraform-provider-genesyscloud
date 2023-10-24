@@ -7,19 +7,18 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceIdpSalesforce(t *testing.T) {
-	t.Parallel()
 	var (
 		uri1 = "https://test.com/1"
 		uri2 = "https://test.com/2"
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
@@ -30,7 +29,7 @@ func TestAccResourceIdpSalesforce(t *testing.T) {
 					nullValue, // Not disabled
 				),
 				Check: resource.ComposeTestCheckFunc(
-					validateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "issuer_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "target_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "disabled", falseValue),
@@ -45,7 +44,7 @@ func TestAccResourceIdpSalesforce(t *testing.T) {
 					trueValue, // disabled
 				),
 				Check: resource.ComposeTestCheckFunc(
-					validateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert2),
+					ValidateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "issuer_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "target_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "disabled", trueValue),
@@ -60,8 +59,41 @@ func TestAccResourceIdpSalesforce(t *testing.T) {
 					falseValue, // disabled
 				),
 				Check: resource.ComposeTestCheckFunc(
-					validateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert1),
-					validateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert2),
+					ValidateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "issuer_uri", uri2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "target_uri", uri1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "disabled", falseValue),
+				),
+			},
+			{
+				// Update back to one cert in array
+				Config: generateIdpSalesforceResource(
+					generateStringArray(strconv.Quote(testCert1)),
+					uri2,
+					uri1,
+					falseValue, // disabled
+				),
+				Check: resource.ComposeTestCheckFunc(
+					ValidateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "certificates.#", "1"),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "issuer_uri", uri2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "target_uri", uri1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "disabled", falseValue),
+				),
+			},
+			{
+				// Update back to two certs in array
+				Config: generateIdpSalesforceResource(
+					generateStringArray(strconv.Quote(testCert1), strconv.Quote(testCert2)),
+					uri2,
+					uri1,
+					falseValue, // disabled
+				),
+				Check: resource.ComposeTestCheckFunc(
+					ValidateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_salesforce.salesforce", "certificates", testCert2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "certificates.#", "2"),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "issuer_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "target_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_salesforce.salesforce", "disabled", falseValue),
@@ -102,7 +134,7 @@ func testVerifyIdpSalesforceDestroyed(state *terraform.State) error {
 		salesforce, resp, err := idpAPI.GetIdentityprovidersSalesforce()
 		if salesforce != nil {
 			return fmt.Errorf("Salesforce still exists")
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Salesforce not found as expected
 			continue
 		} else {

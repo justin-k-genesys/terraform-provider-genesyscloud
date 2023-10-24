@@ -8,7 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 type widgetDeploymentConfig struct {
@@ -93,15 +93,15 @@ func TestAccResourceWidgetDeploymentV2Widget(t *testing.T) {
 		disabled:               "true",
 	}
 
-	err := authorizeSdk()
+	_, err := AuthorizeSdk()
 	if err != nil {
 		t.Fatal(err)
 	}
 	deleteWidgetDeploymentWithName(name)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 
 		Steps: []resource.TestStep{
 			{
@@ -162,15 +162,15 @@ func TestAccResourceWidgetDeploymentV1Widget(t *testing.T) {
 		authenticationUrl:      "https://localhost",
 	}
 
-	err := authorizeSdk()
+	_, err := AuthorizeSdk()
 	if err != nil {
 		t.Fatal(err)
 	}
 	deleteWidgetDeploymentWithName(name)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 
 		Steps: []resource.TestStep{
 			{
@@ -234,7 +234,7 @@ func testVerifyWidgetDeploymentDestroyed(state *terraform.State) error {
 			return fmt.Errorf("Widget deployment (%s) still exists", rs.Primary.ID)
 		}
 
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			// Widget deployment does not exits keep going
 			continue
 		}

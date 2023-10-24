@@ -4,19 +4,25 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 	"github.com/nyaruka/phonenumbers"
 )
 
-func getAllLocations(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllLocations(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	locationsAPI := platformclientv2.NewLocationsApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -31,30 +37,31 @@ func getAllLocations(_ context.Context, clientConfig *platformclientv2.Configura
 		}
 
 		for _, location := range *locations.Entities {
-			resources[*location.Id] = &ResourceMeta{Name: *location.Name}
+			resources[*location.Id] = &resourceExporter.ResourceMeta{Name: *location.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func locationExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllLocations),
-		RefAttrs: map[string]*RefAttrSettings{
+func LocationExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllLocations),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"path": {RefType: "genesyscloud_location"},
 		},
+		E164Numbers: []string{"emergency_number.number"},
 	}
 }
 
-func resourceLocation() *schema.Resource {
+func ResourceLocation() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Location",
 
-		CreateContext: createWithPooledClient(createLocation),
-		ReadContext:   readWithPooledClient(readLocation),
-		UpdateContext: updateWithPooledClient(updateLocation),
-		DeleteContext: deleteWithPooledClient(deleteLocation),
+		CreateContext: CreateWithPooledClient(createLocation),
+		ReadContext:   ReadWithPooledClient(readLocation),
+		UpdateContext: UpdateWithPooledClient(updateLocation),
+		DeleteContext: DeleteWithPooledClient(deleteLocation),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -84,10 +91,10 @@ func resourceLocation() *schema.Resource {
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"number": {
-							Description:      "Emergency phone number.",
+							Description:      "Emergency phone number.  Must be in an E.164 number format.",
 							Type:             schema.TypeString,
 							Required:         true,
-							ValidateDiagFunc: validatePhoneNumber,
+							ValidateDiagFunc: ValidatePhoneNumber,
 							DiffSuppressFunc: comparePhoneNumbers,
 						},
 						"type": {
@@ -148,7 +155,7 @@ func createLocation(ctx context.Context, d *schema.ResourceData, meta interface{
 	name := d.Get("name").(string)
 	notes := d.Get("notes").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	locationsAPI := platformclientv2.NewLocationsApiWithConfig(sdkConfig)
 
 	create := platformclientv2.Locationcreatedefinition{
@@ -175,17 +182,17 @@ func createLocation(ctx context.Context, d *schema.ResourceData, meta interface{
 }
 
 func readLocation(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	locationsAPI := platformclientv2.NewLocationsApiWithConfig(sdkConfig)
 
 	log.Printf("Reading location %s", d.Id())
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		location, resp, getErr := locationsAPI.GetLocation(d.Id(), nil)
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read location %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read location %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read location %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read location %s: %s", d.Id(), getErr))
 		}
 
 		if location.State != nil && *location.State == "deleted" {
@@ -193,7 +200,7 @@ func readLocation(ctx context.Context, d *schema.ResourceData, meta interface{})
 			return nil
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceLocation())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceLocation())
 		d.Set("name", *location.Name)
 
 		if location.Notes != nil {
@@ -220,11 +227,11 @@ func updateLocation(ctx context.Context, d *schema.ResourceData, meta interface{
 	name := d.Get("name").(string)
 	notes := d.Get("notes").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	locationsAPI := platformclientv2.NewLocationsApiWithConfig(sdkConfig)
 
 	log.Printf("Updating location %s", name)
-	diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Get current location version
 		location, resp, getErr := locationsAPI.GetLocation(d.Id(), nil)
 		if getErr != nil {
@@ -271,11 +278,11 @@ func updateLocation(ctx context.Context, d *schema.ResourceData, meta interface{
 func deleteLocation(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	locationsAPI := platformclientv2.NewLocationsApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting location %s", name)
-	diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Directory occasionally returns version errors on deletes if an object was updated at the same time.
 		resp, err := locationsAPI.DeleteLocation(d.Id())
 		if err != nil {
@@ -287,15 +294,15 @@ func deleteLocation(ctx context.Context, d *schema.ResourceData, meta interface{
 		return diagErr
 	}
 
-	return withRetries(ctx, 30*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 30*time.Second, func() *retry.RetryError {
 		location, resp, err := locationsAPI.GetLocation(d.Id(), nil)
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// Location deleted
 				log.Printf("Deleted location %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting location %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting location %s: %s", d.Id(), err))
 		}
 
 		if location.State != nil && *location.State == "deleted" {
@@ -304,14 +311,14 @@ func deleteLocation(ctx context.Context, d *schema.ResourceData, meta interface{
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("Location %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Location %s still exists", d.Id()))
 	})
 }
 
 func buildSdkLocationPath(d *schema.ResourceData) *[]string {
 	path := []string{}
 	if pathConfig, ok := d.GetOk("path"); ok {
-		path = interfaceListToStrings(pathConfig.([]interface{}))
+		path = lists.InterfaceListToStrings(pathConfig.([]interface{}))
 	}
 	return &path
 }
@@ -413,4 +420,45 @@ func comparePhoneNumbers(_, old, new string, _ *schema.ResourceData) bool {
 		return old == new
 	}
 	return phonenumbers.IsNumberMatchWithNumbers(oldNum, newNum) == phonenumbers.EXACT_MATCH
+}
+
+func GenerateLocationResourceBasic(
+	resourceID,
+	name string,
+	nestedBlocks ...string) string {
+	return GenerateLocationResource(resourceID, name, "", []string{})
+}
+
+func GenerateLocationResource(
+	resourceID,
+	name,
+	notes string,
+	paths []string,
+	nestedBlocks ...string) string {
+	return fmt.Sprintf(`resource "genesyscloud_location" "%s" {
+		name = "%s"
+        notes = "%s"
+        path = [%s]
+        %s
+	}
+	`, resourceID, name, notes, strings.Join(paths, ","), strings.Join(nestedBlocks, "\n"))
+}
+
+func GenerateLocationEmergencyNum(number, typeStr string) string {
+	return fmt.Sprintf(`emergency_number {
+		number = "%s"
+        type = %s
+	}
+	`, number, typeStr)
+}
+
+func GenerateLocationAddress(street1, city, state, country, zip string) string {
+	return fmt.Sprintf(`address {
+		street1  = "%s"
+		city     = "%s"
+		state    = "%s"
+		country  = "%s"
+		zip_code = "%s"
+	}
+	`, street1, city, state, country, zip)
 }

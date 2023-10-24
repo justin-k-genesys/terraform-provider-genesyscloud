@@ -1,0 +1,8 @@
+resource "genesyscloud_knowledge_category" "example_category" {
+  knowledge_base_id = genesyscloud_knowledge_knowledgebase.example_knowledgebase.id
+  knowledge_category {
+    name        = "ExampleCategory"
+    description = "An example category"
+    parent_id   = genesyscloud_knowledge_category.parent_category.id
+  }
+}

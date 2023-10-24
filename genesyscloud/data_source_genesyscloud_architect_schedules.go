@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func dataSourceSchedule() *schema.Resource {
+func DataSourceSchedule() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Schedule. Select a schedule by name",
-		ReadContext: readWithPooledClient(dataSourceScheduleRead),
+		ReadContext: ReadWithPooledClient(dataSourceScheduleRead),
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Description: "Schedule name.",
@@ -26,22 +27,22 @@ func dataSourceSchedule() *schema.Resource {
 }
 
 func dataSourceScheduleRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*providerMeta).ClientConfig
+	sdkConfig := m.(*ProviderMeta).ClientConfig
 	archAPI := platformclientv2.NewArchitectApiWithConfig(sdkConfig)
 
 	name := d.Get("name").(string)
 
-	return withRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		const pageSize = 100
 		for pageNum := 1; ; pageNum++ {
 			schedule, _, getErr := archAPI.GetArchitectSchedules(pageNum, pageSize, "", "", name, nil)
 
 			if getErr != nil {
-				return resource.NonRetryableError(fmt.Errorf("Error requesting schedule %s: %s", name, getErr))
+				return retry.NonRetryableError(fmt.Errorf("Error requesting schedule %s: %s", name, getErr))
 			}
 
 			if schedule.Entities == nil || len(*schedule.Entities) == 0 {
-				return resource.RetryableError(fmt.Errorf("No schedule found with name %s", name))
+				return retry.RetryableError(fmt.Errorf("No schedule found with name %s", name))
 			}
 
 			d.SetId(*(*schedule.Entities)[0].Id)

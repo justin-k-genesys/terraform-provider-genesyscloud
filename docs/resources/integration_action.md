@@ -21,24 +21,25 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_integration_action" "test-action" {
-  name           = "Test Action"
-  category       = "Genesys Cloud Data Action"
-  integration_id = genesyscloud_integration.test_integ.id
-  secure         = true
+resource "genesyscloud_integration_action" "example-action" {
+  name                   = "Example Action"
+  category               = "Genesys Cloud Data Action"
+  integration_id         = genesyscloud_integration.example_integ.id
+  secure                 = true
+  config_timeout_seconds = 20
   contract_input = jsonencode({
     "type" = "object",
     "required" = [
-      "teststr"
+      "examplestr"
     ],
     "properties" = {
-      "teststr" = {
+      "examplestr" = {
         "type" = "string"
       },
-      "testint" = {
+      "exampleint" = {
         "type" = "integer"
       },
-      "testbool" = {
+      "examplebool" = {
         "type" = "boolean"
       }
     }
@@ -91,16 +92,17 @@ resource "genesyscloud_integration_action" "test-action" {
 ### Required
 
 - `category` (String) Category of action. Can be up to 256 characters long.
-- `contract_input` (String) JSON Schema that defines the body of the request that the client (edge/architect/postman) is sending to the service, on the /execute path. Changes will create a new action.
-- `contract_output` (String) JSON schema that defines the transformed, successful result that will be sent back to the caller. Changes will create a new action.
+- `contract_input` (String) JSON Schema that defines the body of the request that the client (edge/architect/postman) is sending to the service, on the /execute path. Changing the contract_input attribute will cause the existing integration_action to be dropped and recreated with a new ID.
+- `contract_output` (String) JSON schema that defines the transformed, successful result that will be sent back to the caller. Changing the contract_output attribute will cause the existing integration_action to be dropped and recreated with a new ID.
+- `integration_id` (String) The ID of the integration this action is associated with. Changing the integration_id attribute will cause the existing integration_action to be dropped and recreated with a new ID.
 - `name` (String) Name of the action. Can be up to 256 characters long
 
 ### Optional
 
 - `config_request` (Block List, Max: 1) Configuration of outbound request. (see [below for nested schema](#nestedblock--config_request))
 - `config_response` (Block List, Max: 1) Configuration of response processing. (see [below for nested schema](#nestedblock--config_response))
-- `integration_id` (String) The ID of the integration this action is associated with. Changes will create a new action.
-- `secure` (Boolean) Indication of whether or not the action is designed to accept sensitive data. Changes will create a new action. Defaults to `false`.
+- `config_timeout_seconds` (Number) Optional 1-60 second timeout enforced on the execution or test of this action. This setting is invalid for Custom Authentication Actions.
+- `secure` (Boolean) Indication of whether or not the action is designed to accept sensitive data. Changing the secure attribute will cause the existing integration_action to be dropped and recreated with a new ID. Defaults to `false`.
 
 ### Read-Only
 

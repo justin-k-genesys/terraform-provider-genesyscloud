@@ -21,7 +21,7 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_telephony_providers_edges_extension_pool" "test_extension_pool" {
+resource "genesyscloud_telephony_providers_edges_extension_pool" "example_extension_pool" {
   start_number = "1000"
   end_number   = "1099"
   description  = "Description of the Extension range"
@@ -33,8 +33,8 @@ resource "genesyscloud_telephony_providers_edges_extension_pool" "test_extension
 
 ### Required
 
-- `end_number` (String) Ending phone number of the Extension Pool range.
-- `start_number` (String) Starting phone number of the Extension Pool range.
+- `end_number` (String) Ending phone number of the Extension Pool range. Changing the end_number attribute will cause the extension object to be dropped and recreated with a new ID.
+- `start_number` (String) Starting phone number of the Extension Pool range. Changing the start_number attribute will cause the extension object to be dropped and recreated with a new ID.
 
 ### Optional
 

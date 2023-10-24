@@ -7,14 +7,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"terraform-provider-genesyscloud/genesyscloud/util/chunks"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
+	"terraform-provider-genesyscloud/genesyscloud/util/resourcedata"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
-	"github.com/nyaruka/phonenumbers"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 var (
@@ -22,10 +27,10 @@ var (
 	groupAddressResource = &schema.Resource{
 		Schema: map[string]*schema.Schema{
 			"number": {
-				Description:      "Phone number for this contact type.",
+				Description:      "Phone number for this contact type. Must be in an E.164 number format.",
 				Type:             schema.TypeString,
-				Required:         true,
-				ValidateDiagFunc: validatePhoneNumber,
+				Optional:         true,
+				ValidateDiagFunc: ValidatePhoneNumber,
 			},
 			"extension": {
 				Description: "Phone extension.",
@@ -42,8 +47,8 @@ var (
 	}
 )
 
-func getAllGroups(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllGroups(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	groupsAPI := platformclientv2.NewGroupsApiWithConfig(clientConfig)
 
 	for pageNum := 1; ; pageNum++ {
@@ -58,31 +63,32 @@ func getAllGroups(_ context.Context, clientConfig *platformclientv2.Configuratio
 		}
 
 		for _, group := range *groups.Entities {
-			resources[*group.Id] = &ResourceMeta{Name: *group.Name}
+			resources[*group.Id] = &resourceExporter.ResourceMeta{Name: *group.Name}
 		}
 	}
 
 	return resources, nil
 }
 
-func groupExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllGroups),
-		RefAttrs: map[string]*RefAttrSettings{
+func GroupExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllGroups),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"owner_ids":  {RefType: "genesyscloud_user"},
 			"member_ids": {RefType: "genesyscloud_user"},
 		},
+		E164Numbers: []string{"addresses.number"},
 	}
 }
 
-func resourceGroup() *schema.Resource {
+func ResourceGroup() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Directory Group",
 
-		CreateContext: createWithPooledClient(createGroup),
-		ReadContext:   readWithPooledClient(readGroup),
-		UpdateContext: updateWithPooledClient(updateGroup),
-		DeleteContext: deleteWithPooledClient(deleteGroup),
+		CreateContext: CreateWithPooledClient(createGroup),
+		ReadContext:   ReadWithPooledClient(readGroup),
+		UpdateContext: UpdateWithPooledClient(updateGroup),
+		DeleteContext: DeleteWithPooledClient(deleteGroup),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -99,7 +105,7 @@ func resourceGroup() *schema.Resource {
 				Optional:    true,
 			},
 			"type": {
-				Description:  "Group type (official | social). This cannot be modified.",
+				Description:  "Group type (official | social). This cannot be modified. Changing type attribute will cause the existing genesys_group object to dropped and recreated with a new ID.",
 				Type:         schema.TypeString,
 				Optional:     true,
 				Default:      "official",
@@ -121,14 +127,13 @@ func resourceGroup() *schema.Resource {
 			},
 			"addresses": {
 				Description: "Contact numbers for this group.",
-				Type:        schema.TypeSet,
+				Type:        schema.TypeList,
 				Optional:    true,
 				Elem:        groupAddressResource,
-				Set:         groupAddressHash,
 			},
 			"owner_ids": {
 				Description: "IDs of owners of the group.",
-				Type:        schema.TypeSet,
+				Type:        schema.TypeList,
 				Optional:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
@@ -150,8 +155,13 @@ func createGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 	visibility := d.Get("visibility").(string)
 	rulesVisible := d.Get("rules_visible").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	groupsAPI := platformclientv2.NewGroupsApiWithConfig(sdkConfig)
+
+	addresses, err := buildSdkGroupAddresses(d)
+	if err != nil {
+		return diag.Errorf("%v", err)
+	}
 
 	log.Printf("Creating group %s", name)
 	group, _, err := groupsAPI.PostGroups(platformclientv2.Groupcreate{
@@ -159,8 +169,8 @@ func createGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 		VarType:      &groupType,
 		Visibility:   &visibility,
 		RulesVisible: &rulesVisible,
-		Addresses:    buildSdkGroupAddresses(d),
-		OwnerIds:     buildSdkGroupOwners(d),
+		Addresses:    addresses,
+		OwnerIds:     lists.BuildSdkStringListFromInterfaceArray(d, "owner_ids"),
 	})
 	if err != nil {
 		return diag.Errorf("Failed to create group %s: %s", name, err)
@@ -186,66 +196,39 @@ func createGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 }
 
 func readGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	groupsAPI := platformclientv2.NewGroupsApiWithConfig(sdkConfig)
 
 	log.Printf("Reading group %s", d.Id())
 
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		group, resp, getErr := groupsAPI.GetGroup(d.Id())
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read group %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read group %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read group %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read group %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceGroup())
-		if group.Name != nil {
-			d.Set("name", *group.Name)
-		} else {
-			d.Set("name", nil)
-		}
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceGroup())
 
-		if group.VarType != nil {
-			d.Set("type", *group.VarType)
-		} else {
-			d.Set("type", nil)
-		}
+		resourcedata.SetNillableValue(d, "name", group.Name)
+		resourcedata.SetNillableValue(d, "type", group.VarType)
+		resourcedata.SetNillableValue(d, "visibility", group.Visibility)
+		resourcedata.SetNillableValue(d, "rules_visible", group.RulesVisible)
+		resourcedata.SetNillableValue(d, "description", group.Description)
 
-		if group.Visibility != nil {
-			d.Set("visibility", *group.Visibility)
-		} else {
-			d.Set("visibility", nil)
-		}
-
-		if group.RulesVisible != nil {
-			d.Set("rules_visible", *group.RulesVisible)
-		} else {
-			d.Set("rules_visible", nil)
-		}
-
-		if group.Description != nil {
-			d.Set("description", *group.Description)
-		} else {
-			d.Set("description", nil)
-		}
+		resourcedata.SetNillableValueWithInterfaceArrayWithFunc(d, "owner_ids", group.Owners, flattenGroupOwners)
 
 		if group.Addresses != nil {
-			d.Set("addresses", flattenGroupAddresses(*group.Addresses))
+			d.Set("addresses", flattenGroupAddresses(d, group.Addresses))
 		} else {
 			d.Set("addresses", nil)
 		}
 
-		if group.Owners != nil {
-			d.Set("owner_ids", flattenGroupOwners(*group.Owners))
-		} else {
-			d.Set("owner_ids", nil)
-		}
-
 		members, err := readGroupMembers(d.Id(), groupsAPI)
 		if err != nil {
-			return resource.NonRetryableError(fmt.Errorf("%v", err))
+			return retry.NonRetryableError(fmt.Errorf("%v", err))
 		}
 		d.Set("member_ids", members)
 
@@ -260,14 +243,19 @@ func updateGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 	visibility := d.Get("visibility").(string)
 	rulesVisible := d.Get("rules_visible").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	groupsAPI := platformclientv2.NewGroupsApiWithConfig(sdkConfig)
 
-	diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Get current group version
 		group, resp, getErr := groupsAPI.GetGroup(d.Id())
 		if getErr != nil {
 			return resp, diag.Errorf("Failed to read group %s: %s", d.Id(), getErr)
+		}
+
+		addresses, err := buildSdkGroupAddresses(d)
+		if err != nil {
+			return nil, diag.Errorf("%v", err)
 		}
 
 		log.Printf("Updating group %s", name)
@@ -277,12 +265,13 @@ func updateGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 			Description:  &description,
 			Visibility:   &visibility,
 			RulesVisible: &rulesVisible,
-			Addresses:    buildSdkGroupAddresses(d),
-			OwnerIds:     buildSdkGroupOwners(d),
+			Addresses:    addresses,
+			OwnerIds:     lists.BuildSdkStringListFromInterfaceArray(d, "owner_ids"),
 		})
 		if putErr != nil {
 			return resp, diag.Errorf("Failed to update group %s: %s", d.Id(), putErr)
 		}
+
 		return resp, nil
 	})
 	if diagErr != nil {
@@ -301,10 +290,10 @@ func updateGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 func deleteGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	name := d.Get("name").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	groupsAPI := platformclientv2.NewGroupsApiWithConfig(sdkConfig)
 
-	retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Directory occasionally returns version errors on deletes if an object was updated at the same time.
 		log.Printf("Deleting group %s", name)
 		resp, err := groupsAPI.DeleteGroup(d.Id())
@@ -314,14 +303,14 @@ func deleteGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 		return nil, nil
 	})
 
-	return withRetries(ctx, 60*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 60*time.Second, func() *retry.RetryError {
 		group, resp, err := groupsAPI.GetGroup(d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				log.Printf("Group %s deleted", name)
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting group %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting group %s: %s", d.Id(), err))
 		}
 
 		if group.State != nil && *group.State == "deleted" {
@@ -329,31 +318,12 @@ func deleteGroup(ctx context.Context, d *schema.ResourceData, meta interface{}) 
 			return nil
 		}
 
-		return resource.RetryableError(fmt.Errorf("Group %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Group %s still exists", d.Id()))
 	})
 }
 
-func groupAddressHash(val interface{}) int {
-	// Copy map to avoid modifying state
-	phoneMap := make(map[string]interface{})
-	for k, v := range val.(map[string]interface{}) {
-		phoneMap[k] = v
-	}
-	if num, ok := phoneMap["number"]; ok {
-		// Attempt to format phone numbers before hashing
-		number, err := phonenumbers.Parse(num.(string), "US")
-		if err == nil {
-			phoneMap["number"] = phonenumbers.Format(number, phonenumbers.E164)
-		}
-	}
-
-	return schema.HashResource(groupAddressResource)(phoneMap)
-}
-
-func buildSdkGroupAddresses(d *schema.ResourceData) *[]platformclientv2.Groupcontact {
-	addresses := d.Get("addresses").(*schema.Set)
-	if addresses != nil {
-		addressSlice := addresses.List()
+func buildSdkGroupAddresses(d *schema.ResourceData) (*[]platformclientv2.Groupcontact, error) {
+	if addressSlice, ok := d.Get("addresses").([]interface{}); ok && len(addressSlice) > 0 {
 		sdkContacts := make([]platformclientv2.Groupcontact, len(addressSlice))
 		for i, configPhone := range addressSlice {
 			phoneMap := configPhone.(map[string]interface{})
@@ -363,30 +333,42 @@ func buildSdkGroupAddresses(d *schema.ResourceData) *[]platformclientv2.Groupcon
 				MediaType: &groupPhoneType, // Only option is PHONE
 			}
 
-			if phoneNum, ok := phoneMap["number"].(string); ok {
+			if err := validateAddressesMap(phoneMap); err != nil {
+				return nil, err
+			}
+
+			if phoneNum, ok := phoneMap["number"].(string); ok && phoneNum != "" {
 				contact.Address = &phoneNum
 			}
-			if phoneExt, ok := phoneMap["extension"].(string); ok {
+
+			if phoneExt := phoneMap["extension"].(string); ok && phoneExt != "" {
 				contact.Extension = &phoneExt
 			}
 
 			sdkContacts[i] = contact
 		}
-		return &sdkContacts
+		return &sdkContacts, nil
 	}
+	return nil, nil
+}
+
+// 'number' and 'extension' conflict with eachother. However, one must be set.
+// This function validates that the user has satisfied these conditions
+func validateAddressesMap(m map[string]interface{}) error {
+	number, _ := m["number"].(string)
+	extension, _ := m["extension"].(string)
+
+	if (number != "" && extension != "") ||
+		(number == "" && extension == "") {
+		return fmt.Errorf("Either 'number' or 'extension' must be set inside addresses, but both cannot be set.")
+	}
+
 	return nil
 }
 
-func buildSdkGroupOwners(d *schema.ResourceData) *[]string {
-	if permConfig, ok := d.GetOk("owner_ids"); ok {
-		return setToStringList(permConfig.(*schema.Set))
-	}
-	return nil
-}
-
-func flattenGroupAddresses(addresses []platformclientv2.Groupcontact) *schema.Set {
-	addressSet := schema.NewSet(groupAddressHash, []interface{}{})
-	for _, address := range addresses {
+func flattenGroupAddresses(d *schema.ResourceData, addresses *[]platformclientv2.Groupcontact) []interface{} {
+	addressSlice := make([]interface{}, 0)
+	for _, address := range *addresses {
 		if address.MediaType != nil {
 			if *address.MediaType == groupPhoneType {
 				phoneNumber := make(map[string]interface{})
@@ -394,84 +376,102 @@ func flattenGroupAddresses(addresses []platformclientv2.Groupcontact) *schema.Se
 				// Strip off any parentheses from phone numbers
 				if address.Address != nil {
 					phoneNumber["number"] = strings.Trim(*address.Address, "()")
-				} else if address.Display != nil {
-					// Some numbers are only returned in Display
-					phoneNumber["number"] = strings.Trim(*address.Display, "()")
 				}
 
-				if address.Extension != nil {
-					phoneNumber["extension"] = *address.Extension
+				resourcedata.SetMapValueIfNotNil(phoneNumber, "extension", address.Extension)
+				resourcedata.SetMapValueIfNotNil(phoneNumber, "type", address.VarType)
+
+				// Sometimes the number or extension is only returned in Display
+				if address.Address == nil &&
+					address.Extension == nil &&
+					address.Display != nil {
+					setExtensionOrNumberBasedOnDisplay(d, phoneNumber, &address)
 				}
 
-				if address.VarType != nil {
-					phoneNumber["type"] = *address.VarType
-				}
-				addressSet.Add(phoneNumber)
+				addressSlice = append(addressSlice, phoneNumber)
 			} else {
 				log.Printf("Unknown address media type %s", *address.MediaType)
 			}
 		}
 	}
-	return addressSet
+	return addressSlice
 }
 
-func flattenGroupOwners(owners []platformclientv2.User) *schema.Set {
-	interfaceList := make([]interface{}, len(owners))
-	for i, v := range owners {
+/**
+*  The api can sometimes return only the display which holds the value
+*  that was stored in either `address` or `extension`
+*  This function establishes which field was set in the schema data (`extension` or `address`)
+*  and then sets that field in the map to the value that came back in `display`
+ */
+func setExtensionOrNumberBasedOnDisplay(d *schema.ResourceData, addressMap map[string]interface{}, address *platformclientv2.Groupcontact) {
+	display := strings.Trim(*address.Display, "()")
+	schemaAddresses := d.Get("addresses").([]interface{})
+	for _, a := range schemaAddresses {
+		currentAddress, ok := a.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		addressType, _ := currentAddress["type"].(string)
+		if addressType != *address.VarType {
+			continue
+		}
+		if ext, _ := currentAddress["extension"].(string); ext != "" {
+			addressMap["extension"] = display
+		} else if number, _ := currentAddress["number"].(string); number != "" {
+			addressMap["number"] = display
+		}
+	}
+}
+
+func flattenGroupOwners(owners *[]platformclientv2.User) []interface{} {
+	interfaceList := make([]interface{}, len(*owners))
+	for i, v := range *owners {
 		interfaceList[i] = *v.Id
 	}
-	return schema.NewSet(schema.HashString, interfaceList)
+	return interfaceList
 }
 
 func updateGroupMembers(d *schema.ResourceData, groupsAPI *platformclientv2.GroupsApi) diag.Diagnostics {
 	if d.HasChange("member_ids") {
 		if membersConfig := d.Get("member_ids"); membersConfig != nil {
-			// Get existing members
-			members, _, err := groupsAPI.GetGroupIndividuals(d.Id())
+			configMemberIds := *lists.SetToStringList(membersConfig.(*schema.Set))
+			existingMemberIds, err := getGroupMemberIds(d, groupsAPI)
 			if err != nil {
-				return diag.FromErr(err)
+				return err
 			}
 
-			var existingMembers []string
-			if members.Entities != nil {
-				for _, member := range *members.Entities {
-					existingMembers = append(existingMembers, *member.Id)
+			maxMembersPerRequest := 50
+			membersToRemoveList := lists.SliceDifference(existingMemberIds, configMemberIds)
+			chunkedMemberIdsDelete := chunks.ChunkBy(membersToRemoveList, maxMembersPerRequest)
+
+			chunkProcessor := func(membersToRemove []string) diag.Diagnostics {
+				if len(membersToRemove) > 0 {
+					if diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+						_, resp, err := groupsAPI.DeleteGroupMembers(d.Id(), strings.Join(membersToRemove, ","))
+						if err != nil {
+							return resp, diag.Errorf("Failed to remove members from group %s: %s", d.Id(), err)
+						}
+						return resp, nil
+					}); diagErr != nil {
+						return diagErr
+					}
 				}
-			}
-			configMembers := *setToStringList(membersConfig.(*schema.Set))
-
-			membersToRemove := sliceDifference(existingMembers, configMembers)
-			if len(membersToRemove) > 0 {
-				if diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
-					_, resp, err := groupsAPI.DeleteGroupMembers(d.Id(), strings.Join(membersToRemove, ","))
-					if err != nil {
-						return resp, diag.Errorf("Failed to remove members from group %s: %s", d.Id(), err)
-					}
-					return resp, nil
-				}); diagErr != nil {
-					return diagErr
-				}
+				return nil
 			}
 
-			membersToAdd := sliceDifference(configMembers, existingMembers)
-			if len(membersToAdd) > 0 {
-				if diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
-					// Need the current group version to add members
-					groupInfo, _, getErr := groupsAPI.GetGroup(d.Id())
-					if getErr != nil {
-						return nil, diag.Errorf("Failed to read group %s: %s", d.Id(), getErr)
-					}
+			if err := chunks.ProcessChunks(chunkedMemberIdsDelete, chunkProcessor); err != nil {
+				return err
+			}
 
-					_, resp, postErr := groupsAPI.PostGroupMembers(d.Id(), platformclientv2.Groupmembersupdate{
-						MemberIds: &membersToAdd,
-						Version:   groupInfo.Version,
-					})
-					if err != nil {
-						return resp, diag.Errorf("Failed to add group members %s: %s", d.Id(), postErr)
-					}
-					return resp, nil
-				}); diagErr != nil {
-					return diagErr
+			membersToAdd := lists.SliceDifference(configMemberIds, existingMemberIds)
+			if len(membersToAdd) < 1 {
+				return nil
+			}
+
+			chunkedMemberIds := lists.ChunkStringSlice(membersToAdd, maxMembersPerRequest)
+			for _, chunk := range chunkedMemberIds {
+				if err := addGroupMembers(d, chunk, groupsAPI); err != nil {
+					return err
 				}
 			}
 		}
@@ -493,4 +493,83 @@ func readGroupMembers(groupID string, groupsAPI *platformclientv2.GroupsApi) (*s
 		return schema.NewSet(schema.HashString, interfaceList), nil
 	}
 	return nil, nil
+}
+
+func getGroupMemberIds(d *schema.ResourceData, groupsAPI *platformclientv2.GroupsApi) ([]string, diag.Diagnostics) {
+	members, _, err := groupsAPI.GetGroupIndividuals(d.Id())
+	if err != nil {
+		return nil, diag.FromErr(err)
+	}
+
+	var existingMembers []string
+	if members.Entities != nil {
+		for _, member := range *members.Entities {
+			existingMembers = append(existingMembers, *member.Id)
+		}
+	}
+	return existingMembers, nil
+}
+
+func addGroupMembers(d *schema.ResourceData, membersToAdd []string, groupsAPI *platformclientv2.GroupsApi) diag.Diagnostics {
+	if diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+		// Need the current group version to add members
+		groupInfo, _, getErr := groupsAPI.GetGroup(d.Id())
+		if getErr != nil {
+			return nil, diag.Errorf("Failed to read group %s: %s", d.Id(), getErr)
+		}
+
+		_, resp, postErr := groupsAPI.PostGroupMembers(d.Id(), platformclientv2.Groupmembersupdate{
+			MemberIds: &membersToAdd,
+			Version:   groupInfo.Version,
+		})
+		if postErr != nil {
+			return resp, diag.Errorf("Failed to add group members %s: %s", d.Id(), postErr)
+		}
+		return resp, nil
+	}); diagErr != nil {
+		return diagErr
+	}
+	return nil
+}
+
+func GenerateBasicGroupResource(resourceID string, name string, nestedBlocks ...string) string {
+	return generateGroupResource(resourceID, name, nullValue, nullValue, nullValue, trueValue, nestedBlocks...)
+}
+
+func generateGroupResource(
+	resourceID string,
+	name string,
+	desc string,
+	groupType string,
+	visibility string,
+	rulesVisible string,
+	nestedBlocks ...string) string {
+	return fmt.Sprintf(`resource "genesyscloud_group" "%s" {
+		name = "%s"
+		description = %s
+		type = %s
+		visibility = %s
+		rules_visible = %s
+        %s
+	}
+	`, resourceID, name, desc, groupType, visibility, rulesVisible, strings.Join(nestedBlocks, "\n"))
+}
+
+func generateGroupAddress(number string, phoneType string, extension string) string {
+	return fmt.Sprintf(`addresses {
+				number = %s
+				type = "%s"
+                extension = %s
+			}
+			`, number, phoneType, extension)
+}
+
+func generateGroupOwners(userIDs ...string) string {
+	return fmt.Sprintf(`owner_ids = [%s]
+	`, strings.Join(userIDs, ","))
+}
+
+func generateGroupMembers(userIDs ...string) string {
+	return fmt.Sprintf(`member_ids = [%s]
+	`, strings.Join(userIDs, ","))
 }

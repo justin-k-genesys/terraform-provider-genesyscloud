@@ -17,12 +17,12 @@ func TestAccDataSourceUser(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Search by email
-				Config: generateBasicUserResource(
+				Config: GenerateBasicUserResource(
 					userResource,
 					userEmail,
 					userName,
@@ -38,7 +38,7 @@ func TestAccDataSourceUser(t *testing.T) {
 			},
 			{
 				// Search by name
-				Config: generateBasicUserResource(
+				Config: GenerateBasicUserResource(
 					userResource,
 					userEmail,
 					userName,

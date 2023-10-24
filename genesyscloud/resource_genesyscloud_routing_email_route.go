@@ -7,12 +7,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 var (
@@ -32,51 +35,52 @@ var (
 	}
 )
 
-func getAllRoutingEmailRoutes(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllRoutingEmailRoutes(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	routingAPI := platformclientv2.NewRoutingApiWithConfig(clientConfig)
 
-	domains, _, getErr := routingAPI.GetRoutingEmailDomains(false)
-	if getErr != nil {
-		return nil, diag.Errorf("Failed to get routing email domains: %v", getErr)
-	}
+	for pageNum := 1; ; pageNum++ {
+		const pageSize = 100
+		domains, _, getErr := routingAPI.GetRoutingEmailDomains(pageNum, pageSize, false, "")
+		if getErr != nil {
+			return nil, diag.Errorf("Failed to get routing email domains: %v", getErr)
+		}
 
-	if domains.Entities == nil || len(*domains.Entities) == 0 {
-		return resources, nil
-	}
+		if domains.Entities == nil || len(*domains.Entities) == 0 {
+			return resources, nil
+		}
 
-	for _, domain := range *domains.Entities {
-		for pageNum := 1; ; pageNum++ {
-			const pageSize = 100
-			routes, resp, getErr := routingAPI.GetRoutingEmailDomainRoutes(*domain.Id, pageSize, pageNum, "")
-			if getErr != nil {
-				if isStatus404(resp) {
-					// Domain not found
+		for _, domain := range *domains.Entities {
+			for pageNum := 1; ; pageNum++ {
+				const pageSize = 100
+				routes, resp, getErr := routingAPI.GetRoutingEmailDomainRoutes(*domain.Id, pageSize, pageNum, "")
+				if getErr != nil {
+					if IsStatus404(resp) {
+						// Domain not found
+						break
+					}
+					return nil, diag.Errorf("Failed to get page of email routes: %v", getErr)
+				}
+
+				if routes.Entities == nil || len(*routes.Entities) == 0 {
 					break
 				}
-				return nil, diag.Errorf("Failed to get page of email routes: %v", getErr)
-			}
 
-			if routes.Entities == nil || len(*routes.Entities) == 0 {
-				break
-			}
-
-			for _, route := range *routes.Entities {
-				resources[*route.Id] = &ResourceMeta{
-					Name:     *route.Pattern + *domain.Id,
-					IdPrefix: *domain.Id + "/",
+				for _, route := range *routes.Entities {
+					resources[*route.Id] = &resourceExporter.ResourceMeta{
+						Name:     *route.Pattern + *domain.Id,
+						IdPrefix: *domain.Id + "/",
+					}
 				}
 			}
 		}
 	}
-
-	return resources, nil
 }
 
-func routingEmailRouteExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllRoutingEmailRoutes),
-		RefAttrs: map[string]*RefAttrSettings{
+func RoutingEmailRouteExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllRoutingEmailRoutes),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"domain_id":                     {RefType: "genesyscloud_routing_email_domain"},
 			"queue_id":                      {RefType: "genesyscloud_routing_queue"},
 			"skill_ids":                     {RefType: "genesyscloud_routing_skill"},
@@ -92,21 +96,21 @@ func routingEmailRouteExporter() *ResourceExporter {
 	}
 }
 
-func resourceRoutingEmailRoute() *schema.Resource {
+func ResourceRoutingEmailRoute() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Routing Email Domain Route",
 
-		CreateContext: createWithPooledClient(createRoutingEmailRoute),
-		ReadContext:   readWithPooledClient(readRoutingEmailRoute),
-		UpdateContext: updateWithPooledClient(updateRoutingEmailRoute),
-		DeleteContext: deleteWithPooledClient(deleteRoutingEmailRoute),
+		CreateContext: CreateWithPooledClient(createRoutingEmailRoute),
+		ReadContext:   ReadWithPooledClient(readRoutingEmailRoute),
+		UpdateContext: UpdateWithPooledClient(updateRoutingEmailRoute),
+		DeleteContext: DeleteWithPooledClient(deleteRoutingEmailRoute),
 		Importer: &schema.ResourceImporter{
 			StateContext: importRoutingEmailRoute,
 		},
 		SchemaVersion: 1,
 		Schema: map[string]*schema.Schema{
 			"domain_id": {
-				Description: "ID of the routing domain such as: 'example.com'",
+				Description: "ID of the routing domain such as: 'example.com'. Changing the domain_id attribute will cause the email_route object to be dropped and recreated with a new ID.",
 				Type:        schema.TypeString,
 				Required:    true,
 				ForceNew:    true,
@@ -124,7 +128,7 @@ func resourceRoutingEmailRoute() *schema.Resource {
 			"from_email": {
 				Description: "The sender email to use for outgoing replies.",
 				Type:        schema.TypeString,
-				Optional:    true,
+				Required:    true,
 			},
 			"queue_id": {
 				Description: "The queue to route the emails to. This should not be set if a flow_id is specified.",
@@ -167,7 +171,16 @@ func resourceRoutingEmailRoute() *schema.Resource {
 						"route_id": {
 							Description: "ID of the route.",
 							Type:        schema.TypeString,
-							Required:    true,
+							Required:    false,
+							Optional:    true,
+						},
+						"self_reference_route": {
+							Description: `Use this route as the reply email address. If true you will use the route id for this resource as the reply and you 
+							              can not set a route. If you set this value to false (or leave the attribute off)you must set a route id.`,
+							Type:     schema.TypeBool,
+							Required: false,
+							Optional: true,
+							Default:  false,
 						},
 					},
 				},
@@ -205,25 +218,37 @@ func createRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta i
 	fromEmail := d.Get("from_email").(string)
 	priority := d.Get("priority").(int)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	replyDomainID, replyRouteID, _ := extractReplyEmailAddressValue(d)
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	routingAPI := platformclientv2.NewRoutingApiWithConfig(sdkConfig)
 
+	//Checking the self_reference_route flag and routeId rules
+	if err := validateSdkReplyEmailAddress(d); err != nil {
+		return diag.Errorf("Error occurred while validating the reply email address when creating the record: %s", err)
+	}
+
 	sdkRoute := platformclientv2.Inboundroute{
-		Pattern:           &pattern,
-		FromName:          &fromName,
-		FromEmail:         &fromEmail,
-		Queue:             buildSdkDomainEntityRef(d, "queue_id"),
-		Priority:          &priority,
-		Language:          buildSdkDomainEntityRef(d, "language_id"),
-		Flow:              buildSdkDomainEntityRef(d, "flow_id"),
-		SpamFlow:          buildSdkDomainEntityRef(d, "spam_flow_id"),
-		Skills:            buildSdkDomainEntityRefArr(d, "skill_ids"),
-		ReplyEmailAddress: buildSdkReplyEmailAddress(d),
-		AutoBcc:           buildSdkAutoBccEmailAddresses(d),
+		Pattern:   &pattern,
+		FromName:  &fromName,
+		FromEmail: &fromEmail,
+		Queue:     BuildSdkDomainEntityRef(d, "queue_id"),
+		Priority:  &priority,
+		Language:  BuildSdkDomainEntityRef(d, "language_id"),
+		Flow:      BuildSdkDomainEntityRef(d, "flow_id"),
+		SpamFlow:  BuildSdkDomainEntityRef(d, "spam_flow_id"),
+		Skills:    BuildSdkDomainEntityRefArr(d, "skill_ids"),
+		AutoBcc:   buildSdkAutoBccEmailAddresses(d),
+	}
+
+	//If the isSelfReferenceRoute() is set to false, we use the route id provided by the terraform script
+	if !isSelfReferenceRouteSet(d) {
+		sdkRoute.ReplyEmailAddress = buildSdkReplyEmailAddress(replyDomainID, replyRouteID)
+
 	}
 
 	log.Printf("Creating routing email route %s %s", pattern, domainID)
 	route, _, err := routingAPI.PostRoutingEmailDomainRoutes(domainID, sdkRoute)
+
 	if err != nil {
 		return diag.Errorf("Failed to create routing email route %s: %s", pattern, err)
 	}
@@ -231,31 +256,41 @@ func createRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta i
 	d.SetId(*route.Id)
 	log.Printf("Created routing email route %s %s %s", pattern, domainID, *route.Id)
 
+	//If the isSelfReferenceRoute() is set to true we need grab the route id for the route and reapply the reply address,
+	if isSelfReferenceRouteSet(d) {
+		sdkRoute.ReplyEmailAddress = buildSdkReplyEmailAddress(replyDomainID, *route.Id)
+		_, _, err = routingAPI.PutRoutingEmailDomainRoute(domainID, *route.Id, sdkRoute)
+
+		if err != nil {
+			return diag.Errorf("Created routing email route %s %s %s, but failed to update the reply answer route to itself. Error %s", pattern, domainID, *route.Id, err)
+		}
+	}
+
 	return readRoutingEmailRoute(ctx, d, meta)
 }
 
 func readRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	domainID := d.Get("domain_id").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	routingAPI := platformclientv2.NewRoutingApiWithConfig(sdkConfig)
 
 	log.Printf("Reading routing email route %s", d.Id())
 
 	// The normal GET route API has a long cache TTL (5 minutes) which can result in stale data.
 	// This can be bypassed by issuing a domain query instead.
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		var route *platformclientv2.Inboundroute
 		for pageNum := 1; ; pageNum++ {
 			const pageSize = 100
 			routes, resp, getErr := routingAPI.GetRoutingEmailDomainRoutes(domainID, pageSize, pageNum, "")
 			if getErr != nil {
-				if isStatus404(resp) {
+				if IsStatus404(resp) {
 					// Domain not found, so route also does not exist
 					d.SetId("")
-					return resource.RetryableError(fmt.Errorf("Failed to read routing email route %s: %s", d.Id(), getErr))
+					return retry.RetryableError(fmt.Errorf("Failed to read routing email route %s: %s", d.Id(), getErr))
 				}
-				return resource.NonRetryableError(fmt.Errorf("Failed to read routing email route %s: %s", d.Id(), getErr))
+				return retry.NonRetryableError(fmt.Errorf("Failed to read routing email route %s: %s", d.Id(), getErr))
 			}
 
 			if routes.Entities == nil || len(*routes.Entities) == 0 {
@@ -275,7 +310,8 @@ func readRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta int
 			return nil
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceRoutingEmailRoute())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceRoutingEmailRoute())
+
 		if route.Pattern != nil {
 			d.Set("pattern", *route.Pattern)
 		} else {
@@ -330,8 +366,19 @@ func readRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta int
 			d.Set("skill_ids", nil)
 		}
 
-		if route.ReplyEmailAddress != nil && *route.ReplyEmailAddress != nil {
-			d.Set("reply_email_address", []interface{}{flattenQueueEmailAddress(**route.ReplyEmailAddress)})
+		if route.ReplyEmailAddress != nil {
+			flattenedEmails := flattenQueueEmailAddress(*route.ReplyEmailAddress)
+			_, _, selfReferenceRoute := extractReplyEmailAddressValue(d)
+
+			//Set the self_reference_route
+			flattenedEmails["self_reference_route"] = selfReferenceRoute
+
+			//If the reply points back to the route then set the route_id to nil because we dont need to set the
+			if selfReferenceRoute {
+				flattenedEmails["route_id"] = nil
+			}
+
+			d.Set("reply_email_address", []interface{}{flattenedEmails})
 		} else {
 			d.Set("reply_email_address", nil)
 		}
@@ -355,25 +402,42 @@ func updateRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta i
 	fromEmail := d.Get("from_email").(string)
 	priority := d.Get("priority").(int)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	//Checking the self_reference_route flag and routeId rules
+	if err := validateSdkReplyEmailAddress(d); err != nil {
+		return diag.Errorf("Error occurred while validating the reply email address while trying to update the record: %s", err)
+	}
+
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	routingAPI := platformclientv2.NewRoutingApiWithConfig(sdkConfig)
+
+	replyDomainID, replyRouteID, _ := extractReplyEmailAddressValue(d)
+
+	sdkRoute := platformclientv2.Inboundroute{
+		Id:        &id,
+		Pattern:   &pattern,
+		FromName:  &fromName,
+		FromEmail: &fromEmail,
+		Queue:     BuildSdkDomainEntityRef(d, "queue_id"),
+		Priority:  &priority,
+		Language:  BuildSdkDomainEntityRef(d, "language_id"),
+		Flow:      BuildSdkDomainEntityRef(d, "flow_id"),
+		SpamFlow:  BuildSdkDomainEntityRef(d, "spam_flow_id"),
+		Skills:    BuildSdkDomainEntityRefArr(d, "skill_ids"),
+		AutoBcc:   buildSdkAutoBccEmailAddresses(d),
+	}
+
+	if isSelfReferenceRouteSet(d) {
+		sdkRoute.ReplyEmailAddress = buildSdkReplyEmailAddress(replyDomainID, d.Id())
+	}
+
+	if !isSelfReferenceRouteSet(d) {
+		sdkRoute.ReplyEmailAddress = buildSdkReplyEmailAddress(replyDomainID, replyRouteID)
+	}
 
 	log.Printf("Updating email route %s", d.Id())
 
-	_, _, err := routingAPI.PutRoutingEmailDomainRoute(domainID, d.Id(), platformclientv2.Inboundroute{
-		Id:                &id,
-		Pattern:           &pattern,
-		FromName:          &fromName,
-		FromEmail:         &fromEmail,
-		Queue:             buildSdkDomainEntityRef(d, "queue_id"),
-		Priority:          &priority,
-		Language:          buildSdkDomainEntityRef(d, "language_id"),
-		Flow:              buildSdkDomainEntityRef(d, "flow_id"),
-		SpamFlow:          buildSdkDomainEntityRef(d, "spam_flow_id"),
-		Skills:            buildSdkDomainEntityRefArr(d, "skill_ids"),
-		ReplyEmailAddress: buildSdkReplyEmailAddress(d),
-		AutoBcc:           buildSdkAutoBccEmailAddresses(d),
-	})
+	_, _, err := routingAPI.PutRoutingEmailDomainRoute(domainID, d.Id(), sdkRoute)
+
 	if err != nil {
 		return diag.Errorf("Failed to update email route %s: %s", d.Id(), err)
 	}
@@ -385,7 +449,7 @@ func updateRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta i
 func deleteRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	domainID := d.Get("domain_id").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	routingAPI := platformclientv2.NewRoutingApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting email route %s", d.Id())
@@ -394,38 +458,71 @@ func deleteRoutingEmailRoute(ctx context.Context, d *schema.ResourceData, meta i
 		return diag.Errorf("Failed to delete email route %s: %s", d.Id(), err)
 	}
 
-	return withRetries(ctx, 60*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 60*time.Second, func() *retry.RetryError {
 		_, resp, err := routingAPI.GetRoutingEmailDomainRoute(domainID, d.Id())
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// Routing email domain route deleted
 				log.Printf("Deleted Routing email domain route %s", d.Id())
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting Routing email domain route %s: %s", d.Id(), err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting Routing email domain route %s: %s", d.Id(), err))
 		}
-		return resource.RetryableError(fmt.Errorf("Routing email domain route %s still exists", d.Id()))
+		return retry.RetryableError(fmt.Errorf("Routing email domain route %s still exists", d.Id()))
 	})
 }
 
-func buildSdkReplyEmailAddress(d *schema.ResourceData) **platformclientv2.Queueemailaddress {
+func isSelfReferenceRouteSet(d *schema.ResourceData) bool {
+	replyEmailAddress := d.Get("reply_email_address").([]interface{})
+	if replyEmailAddress != nil && len(replyEmailAddress) > 0 {
+		settingsMap := replyEmailAddress[0].(map[string]interface{})
+		return settingsMap["self_reference_route"].(bool)
+	}
+
+	return false
+}
+
+func validateSdkReplyEmailAddress(d *schema.ResourceData) error {
 	replyEmailAddress := d.Get("reply_email_address").([]interface{})
 	if replyEmailAddress != nil && len(replyEmailAddress) > 0 {
 		settingsMap := replyEmailAddress[0].(map[string]interface{})
 
-		domainID := settingsMap["domain_id"].(string)
 		routeID := settingsMap["route_id"].(string)
+		selfReferenceRoute := settingsMap["self_reference_route"].(bool)
 
-		// For some reason the SDK expects a pointer to a pointer for this property
-		result := &platformclientv2.Queueemailaddress{
-			Domain: &platformclientv2.Domainentityref{Id: &domainID},
-			Route: &platformclientv2.Inboundroute{
-				Id: &routeID,
-			},
+		if selfReferenceRoute && routeID != "" {
+			return fmt.Errorf("can not set a reply email address route id directly, if the self_reference_route value is set to true")
 		}
-		return &result
+
+		if !selfReferenceRoute && routeID == "" {
+			return fmt.Errorf("you must provide reply email address route id if the self_reference_route value is set to false")
+		}
 	}
+
 	return nil
+}
+
+func extractReplyEmailAddressValue(d *schema.ResourceData) (string, string, bool) {
+	replyEmailAddress := d.Get("reply_email_address").([]interface{})
+	if replyEmailAddress != nil && len(replyEmailAddress) > 0 {
+		settingsMap := replyEmailAddress[0].(map[string]interface{})
+
+		return settingsMap["domain_id"].(string), settingsMap["route_id"].(string), settingsMap["self_reference_route"].(bool)
+	}
+
+	return "", "", false
+}
+
+func buildSdkReplyEmailAddress(domainID string, routeID string) *platformclientv2.Queueemailaddress {
+	// For some reason the SDK expects a pointer to a pointer for this property
+	inboundRoute := &platformclientv2.Inboundroute{
+		Id: &routeID,
+	}
+	result := platformclientv2.Queueemailaddress{
+		Domain: &platformclientv2.Domainentityref{Id: &domainID},
+		Route:  &inboundRoute,
+	}
+	return &result
 }
 
 func buildSdkAutoBccEmailAddresses(d *schema.ResourceData) *[]platformclientv2.Emailaddress {

@@ -14,7 +14,7 @@ Data source for Genesys Cloud Users. Select a user by email or name.
 
 ```terraform
 data "genesyscloud_user" "user" {
-  email = "test@example.com"
+  email = "user@example.com"
 }
 ```
 
@@ -29,5 +29,3 @@ data "genesyscloud_user" "user" {
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-
-

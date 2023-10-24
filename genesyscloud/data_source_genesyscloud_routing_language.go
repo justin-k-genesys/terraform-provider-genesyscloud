@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func dataSourceRoutingLanguage() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Routing Languages. Select a language by name.",
-		ReadContext: readWithPooledClient(dataSourceRoutingLanguageRead),
+		ReadContext: ReadWithPooledClient(dataSourceRoutingLanguageRead),
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Description: "Language name.",
@@ -26,22 +27,22 @@ func dataSourceRoutingLanguage() *schema.Resource {
 }
 
 func dataSourceRoutingLanguageRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*providerMeta).ClientConfig
+	sdkConfig := m.(*ProviderMeta).ClientConfig
 	routingAPI := platformclientv2.NewRoutingApiWithConfig(sdkConfig)
 
 	name := d.Get("name").(string)
 
 	// Find first non-deleted language by name. Retry in case new language is not yet indexed by search
-	return withRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		for pageNum := 1; ; pageNum++ {
 			const pageSize = 50
 			languages, _, getErr := routingAPI.GetRoutingLanguages(pageSize, pageNum, "", name, nil)
 			if getErr != nil {
-				return resource.NonRetryableError(fmt.Errorf("Error requesting language %s: %s", name, getErr))
+				return retry.NonRetryableError(fmt.Errorf("Error requesting language %s: %s", name, getErr))
 			}
 
 			if languages.Entities == nil || len(*languages.Entities) == 0 {
-				return resource.RetryableError(fmt.Errorf("No routing languages found with name %s", name))
+				return retry.RetryableError(fmt.Errorf("No routing languages found with name %s", name))
 			}
 
 			for _, language := range *languages.Entities {

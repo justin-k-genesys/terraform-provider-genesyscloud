@@ -14,7 +14,7 @@ Data source for Genesys Cloud Sites. Select a site by name
 
 ```terraform
 data "genesyscloud_telephony_providers_edges_site" "site" {
-  name = "test site name"
+  name = "example site name"
 }
 ```
 
@@ -25,8 +25,10 @@ data "genesyscloud_telephony_providers_edges_site" "site" {
 
 - `name` (String) Site name.
 
+### Optional
+
+- `managed` (Boolean) Return entities that are managed by Genesys Cloud. Defaults to `false`.
+
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-
-

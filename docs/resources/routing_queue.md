@@ -24,10 +24,10 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_routing_queue" "test_queue" {
-  name                              = "Test Queue"
+resource "genesyscloud_routing_queue" "example_queue" {
+  name                              = "Example Queue"
   division_id                       = genesyscloud_auth_division.home.id
-  description                       = "This is a test queue"
+  description                       = "This is an example description"
   acw_wrapup_prompt                 = "MANDATORY_TIMEOUT"
   acw_timeout_ms                    = 300000
   skill_evaluation_method           = "BEST"
@@ -54,17 +54,22 @@ resource "genesyscloud_routing_queue" "test_queue" {
   }
   bullseye_rings {
     expansion_timeout_seconds = 15.1
-    skills_to_remove          = [genesyscloud_routing_skill.test-skill.id]
+    skills_to_remove          = [genesyscloud_routing_skill.example-skill.id]
+
+    member_groups {
+      member_group_id   = genesyscloud_group.example-group.id
+      member_group_type = "GROUP"
+    }
   }
   default_script_ids = {
     EMAIL = data.genesyscloud_script.email.id
     CHAT  = data.genesyscloud_script.chat.id
   }
   members {
-    user_id  = genesyscloud_user.test-user.id
+    user_id  = genesyscloud_user.example-user.id
     ring_num = 2
   }
-  wrapup_codes = [genesyscloud_routing_wrapupcode.test-code.id]
+  wrapup_codes = [genesyscloud_routing_wrapupcode.example-code.id]
 }
 ```
 
@@ -80,22 +85,23 @@ resource "genesyscloud_routing_queue" "test_queue" {
 - `acw_timeout_ms` (Number) The amount of time the agent can stay in ACW. Only set when ACW is MANDATORY_TIMEOUT, MANDATORY_FORCED_TIMEOUT or AGENT_REQUESTED.
 - `acw_wrapup_prompt` (String) This field controls how the UI prompts the agent for a wrapup (MANDATORY | OPTIONAL | MANDATORY_TIMEOUT | MANDATORY_FORCED_TIMEOUT | AGENT_REQUESTED). Defaults to `MANDATORY_TIMEOUT`.
 - `auto_answer_only` (Boolean) Specifies whether the configured whisper should play for all ACD calls, or only for those which are auto-answered. Defaults to `true`.
-- `bullseye_rings` (Block List, Max: 6) The bullseye ring settings for the queue. (see [below for nested schema](#nestedblock--bullseye_rings))
+- `bullseye_rings` (Block List, Max: 5) The bullseye ring settings for the queue. (see [below for nested schema](#nestedblock--bullseye_rings))
 - `calling_party_name` (String) The name to use for caller identification for outbound calls from this queue.
 - `calling_party_number` (String) The phone number to use for caller identification for outbound calls from this queue.
+- `conditional_group_routing_rules` (Block List, Max: 5) The Conditional Group Routing settings for the queue. (see [below for nested schema](#nestedblock--conditional_group_routing_rules))
 - `default_script_ids` (Map of String) The default script IDs for each communication type. Communication types: (CALL | CALLBACK | CHAT | COBROWSE | EMAIL | MESSAGE | SOCIAL_EXPRESSION | VIDEO | SCREENSHARE)
 - `description` (String) Queue description.
+- `direct_routing` (Block List, Max: 1) Used by the System to set Direct Routing settings for a system Direct Routing queue. (see [below for nested schema](#nestedblock--direct_routing))
 - `division_id` (String) The division to which this queue will belong. If not set, the home division will be used.
 - `email_in_queue_flow_id` (String) The in-queue flow ID to use for email conversations waiting in queue.
 - `enable_manual_assignment` (Boolean) Indicates whether manual assignment is enabled for this queue. Defaults to `false`.
 - `enable_transcription` (Boolean) Indicates whether voice transcription is enabled for this queue. Defaults to `false`.
+- `groups` (Set of String) List of group ids assigned to the queue
 - `media_settings_call` (Block List, Max: 1) Call media settings. (see [below for nested schema](#nestedblock--media_settings_call))
 - `media_settings_callback` (Block List, Max: 1) Callback media settings. (see [below for nested schema](#nestedblock--media_settings_callback))
 - `media_settings_chat` (Block List, Max: 1) Chat media settings. (see [below for nested schema](#nestedblock--media_settings_chat))
 - `media_settings_email` (Block List, Max: 1) Email media settings. (see [below for nested schema](#nestedblock--media_settings_email))
 - `media_settings_message` (Block List, Max: 1) Message media settings. (see [below for nested schema](#nestedblock--media_settings_message))
-- `media_settings_social` (Block List, Max: 1) Social media settings. (see [below for nested schema](#nestedblock--media_settings_social))
-- `media_settings_video` (Block List, Max: 1) Video media settings. (see [below for nested schema](#nestedblock--media_settings_video))
 - `members` (Set of Object) Users in the queue. If not set, this resource will not manage members. (see [below for nested schema](#nestedatt--members))
 - `message_in_queue_flow_id` (String) The in-queue flow ID to use for message conversations waiting in queue.
 - `outbound_email_address` (Block List, Max: 1) The outbound email address settings for this queue. (see [below for nested schema](#nestedblock--outbound_email_address))
@@ -103,6 +109,9 @@ resource "genesyscloud_routing_queue" "test_queue" {
 - `queue_flow_id` (String) The in-queue flow ID to use for call conversations waiting in queue.
 - `routing_rules` (Block List, Max: 6) The routing rules for the queue, used for routing to known or preferred agents. (see [below for nested schema](#nestedblock--routing_rules))
 - `skill_evaluation_method` (String) The skill evaluation method to use when routing conversations (NONE | BEST | ALL). Defaults to `ALL`.
+- `skill_groups` (Set of String) List of skill group ids assigned to the queue.
+- `suppress_in_queue_call_recording` (Boolean) Indicates whether recording in-queue calls is suppressed for this queue. Defaults to `true`.
+- `teams` (Set of String) List of ids assigned to the queue
 - `whisper_prompt_id` (String) The prompt ID used for whisper on the queue, if configured.
 - `wrapup_codes` (Set of String) IDs of wrapup codes assigned to this queue. If not set, this resource will not manage wrapup codes.
 
@@ -119,7 +128,58 @@ Required:
 
 Optional:
 
+- `member_groups` (Block Set) (see [below for nested schema](#nestedblock--bullseye_rings--member_groups))
 - `skills_to_remove` (Set of String) Skill IDs to remove on ring exit.
+
+<a id="nestedblock--bullseye_rings--member_groups"></a>
+### Nested Schema for `bullseye_rings.member_groups`
+
+Required:
+
+- `member_group_id` (String) ID (GUID) for Group, SkillGroup, Team
+- `member_group_type` (String) The type of the member group. Accepted values: TEAM, GROUP, SKILLGROUP
+
+
+
+<a id="nestedblock--conditional_group_routing_rules"></a>
+### Nested Schema for `conditional_group_routing_rules`
+
+Required:
+
+- `condition_value` (Number) The limit value, beyond which a rule evaluates as true.
+- `groups` (Block List, Min: 1) The group(s) to activate if the rule evaluates as true. (see [below for nested schema](#nestedblock--conditional_group_routing_rules--groups))
+- `operator` (String) The operator that compares the actual value against the condition value. Valid values: GreaterThan, GreaterThanOrEqualTo, LessThan, LessThanOrEqualTo.
+
+Optional:
+
+- `metric` (String) The queue metric being evaluated. Valid values: EstimatedWaitTime, ServiceLevel Defaults to `EstimatedWaitTime`.
+- `queue_id` (String) The ID of the queue being evaluated for this rule. For rule 1, this is always the current queue, so should not be specified.
+- `wait_seconds` (Number) The number of seconds to wait in this rule, if it evaluates as true, before evaluating the next rule. For the final rule, this is ignored, so need not be specified. Defaults to `2`.
+
+<a id="nestedblock--conditional_group_routing_rules--groups"></a>
+### Nested Schema for `conditional_group_routing_rules.groups`
+
+Required:
+
+- `member_group_id` (String) ID (GUID) for Group, SkillGroup, Team
+- `member_group_type` (String) The type of the member group. Accepted values: TEAM, GROUP, SKILLGROUP
+
+
+
+<a id="nestedblock--direct_routing"></a>
+### Nested Schema for `direct_routing`
+
+Required:
+
+- `backup_queue_id` (String) Direct Routing default backup queue id.
+
+Optional:
+
+- `agent_wait_seconds` (Number) The queue default time a Direct Routing interaction will wait for an agent before it goes to configured backup. Defaults to `60`.
+- `call_use_agent_address_outbound` (Boolean) Boolean indicating if user Direct Routing addresses should be used outbound on behalf of queue in place of Queue address for calls. Defaults to `true`.
+- `email_use_agent_address_outbound` (Boolean) Boolean indicating if user Direct Routing addresses should be used outbound on behalf of queue in place of Queue address for emails. Defaults to `true`.
+- `message_use_agent_address_outbound` (Boolean) Boolean indicating if user Direct Routing addresses should be used outbound on behalf of queue in place of Queue address for messages. Defaults to `true`.
+- `wait_for_agent` (Boolean) Boolean indicating if Direct Routing interactions should wait for the targeted agent by default. Defaults to `false`.
 
 
 <a id="nestedblock--media_settings_call"></a>
@@ -131,6 +191,10 @@ Required:
 - `service_level_duration_ms` (Number) Service Level target in milliseconds. Must be >= 1000
 - `service_level_percentage` (Number) The desired Service Level. A float value between 0 and 1.
 
+Optional:
+
+- `enable_auto_answer` (Boolean) Auto-Answer for digital channels(Email, Message) Defaults to `false`.
+
 
 <a id="nestedblock--media_settings_callback"></a>
 ### Nested Schema for `media_settings_callback`
@@ -140,6 +204,10 @@ Required:
 - `alerting_timeout_sec` (Number) Alerting timeout in seconds. Must be >= 7
 - `service_level_duration_ms` (Number) Service Level target in milliseconds. Must be >= 1000
 - `service_level_percentage` (Number) The desired Service Level. A float value between 0 and 1.
+
+Optional:
+
+- `enable_auto_answer` (Boolean) Auto-Answer for digital channels(Email, Message) Defaults to `false`.
 
 
 <a id="nestedblock--media_settings_chat"></a>
@@ -151,6 +219,10 @@ Required:
 - `service_level_duration_ms` (Number) Service Level target in milliseconds. Must be >= 1000
 - `service_level_percentage` (Number) The desired Service Level. A float value between 0 and 1.
 
+Optional:
+
+- `enable_auto_answer` (Boolean) Auto-Answer for digital channels(Email, Message) Defaults to `false`.
+
 
 <a id="nestedblock--media_settings_email"></a>
 ### Nested Schema for `media_settings_email`
@@ -160,6 +232,10 @@ Required:
 - `alerting_timeout_sec` (Number) Alerting timeout in seconds. Must be >= 7
 - `service_level_duration_ms` (Number) Service Level target in milliseconds. Must be >= 1000
 - `service_level_percentage` (Number) The desired Service Level. A float value between 0 and 1.
+
+Optional:
+
+- `enable_auto_answer` (Boolean) Auto-Answer for digital channels(Email, Message) Defaults to `false`.
 
 
 <a id="nestedblock--media_settings_message"></a>
@@ -171,25 +247,9 @@ Required:
 - `service_level_duration_ms` (Number) Service Level target in milliseconds. Must be >= 1000
 - `service_level_percentage` (Number) The desired Service Level. A float value between 0 and 1.
 
+Optional:
 
-<a id="nestedblock--media_settings_social"></a>
-### Nested Schema for `media_settings_social`
-
-Required:
-
-- `alerting_timeout_sec` (Number) Alerting timeout in seconds. Must be >= 7
-- `service_level_duration_ms` (Number) Service Level target in milliseconds. Must be >= 1000
-- `service_level_percentage` (Number) The desired Service Level. A float value between 0 and 1.
-
-
-<a id="nestedblock--media_settings_video"></a>
-### Nested Schema for `media_settings_video`
-
-Required:
-
-- `alerting_timeout_sec` (Number) Alerting timeout in seconds. Must be >= 7
-- `service_level_duration_ms` (Number) Service Level target in milliseconds. Must be >= 1000
-- `service_level_percentage` (Number) The desired Service Level. A float value between 0 and 1.
+- `enable_auto_answer` (Boolean) Auto-Answer for digital channels(Email, Message) Defaults to `false`.
 
 
 <a id="nestedatt--members"></a>

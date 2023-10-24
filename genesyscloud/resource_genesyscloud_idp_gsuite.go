@@ -6,46 +6,50 @@ import (
 	"log"
 	"time"
 
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func getAllIdpGsuite(_ context.Context, clientConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
+func getAllIdpGsuite(_ context.Context, clientConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(clientConfig)
-	resources := make(ResourceIDMetaMap)
+	resources := make(resourceExporter.ResourceIDMetaMap)
 
 	_, resp, getErr := idpAPI.GetIdentityprovidersGsuite()
 	if getErr != nil {
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			// Don't export if config doesn't exist
 			return resources, nil
 		}
 		return nil, diag.Errorf("Failed to get IDP GSuite: %v", getErr)
 	}
 
-	resources["0"] = &ResourceMeta{Name: "gsuite"}
+	resources["0"] = &resourceExporter.ResourceMeta{Name: "gsuite"}
 	return resources, nil
 }
 
-func idpGsuiteExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllIdpGsuite),
-		RefAttrs:         map[string]*RefAttrSettings{}, // No references
+func IdpGsuiteExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllIdpGsuite),
+		RefAttrs:         map[string]*resourceExporter.RefAttrSettings{}, // No references
 	}
 }
 
-func resourceIdpGsuite() *schema.Resource {
+func ResourceIdpGsuite() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud Single Sign-on GSuite Identity Provider. See this page for detailed configuration instructions: https://help.mypurecloud.com/articles/add-google-g-suite-single-sign-provider/",
 
-		CreateContext: createWithPooledClient(createIdpGsuite),
-		ReadContext:   readWithPooledClient(readIdpGsuite),
-		UpdateContext: updateWithPooledClient(updateIdpGsuite),
-		DeleteContext: deleteWithPooledClient(deleteIdpGsuite),
+		CreateContext: CreateWithPooledClient(createIdpGsuite),
+		ReadContext:   ReadWithPooledClient(readIdpGsuite),
+		UpdateContext: UpdateWithPooledClient(updateIdpGsuite),
+		DeleteContext: DeleteWithPooledClient(deleteIdpGsuite),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -57,7 +61,7 @@ func resourceIdpGsuite() *schema.Resource {
 		Schema: map[string]*schema.Schema{
 			"certificates": {
 				Description: "PEM or DER encoded public X.509 certificates for SAML signature validation.",
-				Type:        schema.TypeSet,
+				Type:        schema.TypeList,
 				Required:    true,
 				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
@@ -93,26 +97,26 @@ func createIdpGsuite(ctx context.Context, d *schema.ResourceData, meta interface
 }
 
 func readIdpGsuite(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(sdkConfig)
 
 	log.Printf("Reading IDP GSuite")
 
-	return withRetriesForReadCustomTimeout(ctx, d.Timeout(schema.TimeoutRead), d, func() *resource.RetryError {
+	return WithRetriesForReadCustomTimeout(ctx, d.Timeout(schema.TimeoutRead), d, func() *retry.RetryError {
 		gsuite, resp, getErr := idpAPI.GetIdentityprovidersGsuite()
 		if getErr != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				createIdpGsuite(ctx, d, meta)
-				return resource.RetryableError(fmt.Errorf("Failed to read IDP GSuite: %s", getErr))
+				return retry.RetryableError(fmt.Errorf("Failed to read IDP GSuite: %s", getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read IDP GSuite: %s", getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read IDP GSuite: %s", getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceIdpGsuite())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceIdpGsuite())
 		if gsuite.Certificate != nil {
-			d.Set("certificates", stringListToSet([]string{*gsuite.Certificate}))
+			d.Set("certificates", lists.StringListToInterfaceList([]string{*gsuite.Certificate}))
 		} else if gsuite.Certificates != nil {
-			d.Set("certificates", stringListToSet(*gsuite.Certificates))
+			d.Set("certificates", lists.StringListToInterfaceList(*gsuite.Certificates))
 		} else {
 			d.Set("certificates", nil)
 		}
@@ -152,7 +156,7 @@ func updateIdpGsuite(ctx context.Context, d *schema.ResourceData, meta interface
 	relyingPartyID := d.Get("relying_party_identifier").(string)
 	disabled := d.Get("disabled").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(sdkConfig)
 
 	log.Printf("Updating IDP GSuite")
@@ -163,13 +167,12 @@ func updateIdpGsuite(ctx context.Context, d *schema.ResourceData, meta interface
 		Disabled:               &disabled,
 	}
 
-	certificates := buildSdkStringList(d, "certificates")
+	certificates := lists.BuildSdkStringListFromInterfaceArray(d, "certificates")
 	if certificates != nil {
 		if len(*certificates) == 1 {
 			update.Certificate = &(*certificates)[0]
-		} else {
-			update.Certificates = certificates
 		}
+		update.Certificates = certificates
 	}
 
 	_, _, err := idpAPI.PutIdentityprovidersGsuite(update)
@@ -182,7 +185,7 @@ func updateIdpGsuite(ctx context.Context, d *schema.ResourceData, meta interface
 }
 
 func deleteIdpGsuite(ctx context.Context, _ *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	idpAPI := platformclientv2.NewIdentityProviderApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting IDP GSuite")
@@ -191,16 +194,16 @@ func deleteIdpGsuite(ctx context.Context, _ *schema.ResourceData, meta interface
 		return diag.Errorf("Failed to delete IDP GSuite: %s", err)
 	}
 
-	return withRetries(ctx, 60*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 60*time.Second, func() *retry.RetryError {
 		_, resp, err := idpAPI.GetIdentityprovidersGsuite()
 		if err != nil {
-			if isStatus404(resp) {
+			if IsStatus404(resp) {
 				// IDP GSuite deleted
 				log.Printf("Deleted IDP GSuite")
 				return nil
 			}
-			return resource.NonRetryableError(fmt.Errorf("Error deleting IDP GSuite: %s", err))
+			return retry.NonRetryableError(fmt.Errorf("Error deleting IDP GSuite: %s", err))
 		}
-		return resource.RetryableError(fmt.Errorf("IDP GSuite still exists"))
+		return retry.RetryableError(fmt.Errorf("IDP GSuite still exists"))
 	})
 }

@@ -4,11 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand"
+	"os"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
 
@@ -20,8 +25,33 @@ const (
 	testCert2  = "MIIDazCCAlKgAwIBAgIBADANBgkqhkiG9w0BAQsFADBOMQswCQYDVQQGEwJ1czEXMBUGA1UECAwOTm9ydGggQ2Fyb2xpbmExEDAOBgNVBAoMB0dlbmVzeXMxFDASBgNVBAMMC215cHVyZWNsb3VkMCAXDTIyMDUxNzEzNDY0N1oYDzIxMjIwNDIzMTM0NjQ3WjBOMQswCQYDVQQGEwJ1czEXMBUGA1UECAwOTm9ydGggQ2Fyb2xpbmExEDAOBgNVBAoMB0dlbmVzeXMxFDASBgNVBAMMC215cHVyZWNsb3VkMIIBIzANBgkqhkiG9w0BAQEFAAOCARAAMIIBCwKCAQIAzWc4XQthXrGexwsH2urKc1dFPhZMoWhUVjXrb1bc1IdCH63KklnhYiBAB2YakRJVSzoat5iY0X2kNjSIyCtHCxPycpplP4P6BfIEM9jm0s8NmYW3S/8JZW1MiNs/2XTibfyoXmQiHh76BzKCDgniulj2qOxpNHi5M1Az0QxV+GSgVE+mcPA6041idt7n1HpG3gQ7/MrZEd5OdBhyVUa6JPDyTAF7UE9P9v7mIbGoe6R7Y9qQEIbJ8ihoSM+w65fhyDafl9dWjfLmqkI65cYCJ82cGqyseeiHYOXgyfkcC1njrLr5g92DHnOVqVoHZCTzwV+kciyAntuQqyJtHGCGnskCAwEAAaNQME4wHQYDVR0OBBYEFDNbxsJcQMKJVSIHT/3BM1Osb+JOMB8GA1UdIwQYMBaAFDNbxsJcQMKJVSIHT/3BM1Osb+JOMAwGA1UdEwQFMAMBAf8wDQYJKoZIhvcNAQELBQADggECAGuzz8i3w3YrFGeGgxRzwEWUKiH53Sf4w7KIxGeK6oW2BOnhXMYJfuqIAiGaAVQ3uHbTcKwByHLK9/2oWmQAsYsbA3wZpcZXyXk84iCc3aqYkWjeUl0A5wECjNIKkFvS56DCtENLMlc2VI8NGzPoFMaC7Z3nMOlogqsf6KNNydUMgqyosLQqYoRdDbBMXShbn7fvibK4jzhYxuoXCyTwKDg/lr69i5zsVNBMjTu8W3DnmBPbTVBQ9Kd9/nAJoXCbHfx1QW4UEx3mLFDVNhRRdGqran7DIEjCo8BcGilXvHCVCAKwXF1MyqiyLEm8/W7FYzdBBkkVnxOBhMIVjlPGpwLS"
 )
 
+// ProviderFactories are used to instantiate a provider during acceptance testing.
+// The factory function will be invoked for every Terraform CLI command executed
+// to create a provider server to which the CLI can reattach.
+
+func GetProviderFactories(providerResources map[string]*schema.Resource, providerDataSources map[string]*schema.Resource) map[string]func() (*schema.Provider, error) {
+	return map[string]func() (*schema.Provider, error){
+		"genesyscloud": func() (*schema.Provider, error) {
+			provider := New("0.1.0", providerResources, providerDataSources)()
+			return provider, nil
+		},
+	}
+}
+
+func TestAccPreCheck(t *testing.T) {
+	if v := os.Getenv("GENESYSCLOUD_OAUTHCLIENT_ID"); v == "" {
+		t.Fatal("Missing env GENESYSCLOUD_OAUTHCLIENT_ID")
+	}
+	if v := os.Getenv("GENESYSCLOUD_OAUTHCLIENT_SECRET"); v == "" {
+		t.Fatal("Missing env GENESYSCLOUD_OAUTHCLIENT_SECRET")
+	}
+	if v := os.Getenv("GENESYSCLOUD_REGION"); v == "" {
+		os.Setenv("GENESYSCLOUD_REGION", "dca") // Default to dev environment
+	}
+}
+
 // Verify default division is home division
-func testDefaultHomeDivision(resource string) resource.TestCheckFunc {
+func TestDefaultHomeDivision(resource string) resource.TestCheckFunc {
 	return func(state *terraform.State) error {
 		homeDivID, err := getHomeDivisionID()
 		if err != nil {
@@ -47,7 +77,26 @@ func generateStringArray(vals ...string) string {
 	return fmt.Sprintf("[%s]", strings.Join(vals, ","))
 }
 
-func validateStringInArray(resourceName string, attrName string, value string) resource.TestCheckFunc {
+// For fields such as genesyscloud_outbound_campaign.campaign_status, which use a diff suppress func,
+// and may return as "on", or "complete" depending on how long the operation takes
+func VerifyAttributeInArrayOfPotentialValues(resource string, key string, potentialValues []string) resource.TestCheckFunc {
+	return func(state *terraform.State) error {
+		r := state.RootModule().Resources[resource]
+		if r == nil {
+			return fmt.Errorf("%s not found in state", resource)
+		}
+		a := r.Primary.Attributes
+		attributeValue := a[key]
+		for _, v := range potentialValues {
+			if attributeValue == v {
+				return nil
+			}
+		}
+		return fmt.Errorf(`expected %s to be one of [%s], got "%s"`, key, strings.Join(potentialValues, ", "), attributeValue)
+	}
+}
+
+func ValidateStringInArray(resourceName string, attrName string, value string) resource.TestCheckFunc {
 	return func(state *terraform.State) error {
 		resourceState, ok := state.RootModule().Resources[resourceName]
 		if !ok {
@@ -72,7 +121,42 @@ func validateStringInArray(resourceName string, attrName string, value string) r
 	}
 }
 
-func strArrayEquals(a, b []string) bool {
+// The 'TestCheckResourceAttrPair' version of ValidateStringInArray
+func validateResourceAttributeInArray(resource1Name string, arrayAttrName, resource2Name string, valueAttrName string) resource.TestCheckFunc {
+	return func(state *terraform.State) error {
+		valueResourceState, ok := state.RootModule().Resources[resource2Name]
+		if !ok {
+			return fmt.Errorf("Failed to find resourceState %s in state", resource2Name)
+		}
+		resourceID := valueResourceState.Primary.ID
+		value, ok := valueResourceState.Primary.Attributes[valueAttrName]
+		if !ok {
+			return fmt.Errorf("No %s found for %s in state", valueAttrName, resourceID)
+		}
+
+		arrayResourceState, ok := state.RootModule().Resources[resource1Name]
+		if !ok {
+			return fmt.Errorf("Failed to find resourceState %s in state", resource1Name)
+		}
+		resource2ID := arrayResourceState.Primary.ID
+		numAttr, ok := arrayResourceState.Primary.Attributes[arrayAttrName+".#"]
+		if !ok {
+			return fmt.Errorf("No %s found for %s in state", arrayAttrName, resource2ID)
+		}
+
+		numValues, _ := strconv.Atoi(numAttr)
+		for i := 0; i < numValues; i++ {
+			if arrayResourceState.Primary.Attributes[arrayAttrName+"."+strconv.Itoa(i)] == value {
+				// Found value
+				return nil
+			}
+		}
+
+		return fmt.Errorf("%s %s not found for group %s in state", arrayAttrName, value, resourceID)
+	}
+}
+
+func StrArrayEquals(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
 	}
@@ -84,7 +168,7 @@ func strArrayEquals(a, b []string) bool {
 	return true
 }
 
-func validateValueInJsonAttr(resourceName string, attrName string, jsonProp string, jsonValue string) resource.TestCheckFunc {
+func ValidateValueInJsonAttr(resourceName string, attrName string, jsonProp string, jsonValue string) resource.TestCheckFunc {
 	return func(state *terraform.State) error {
 		resourceState, ok := state.RootModule().Resources[resourceName]
 		if !ok {
@@ -116,7 +200,7 @@ func validateValueInJsonAttr(resourceName string, attrName string, jsonProp stri
 			}
 			if arr, ok := val.([]interface{}); ok {
 				// Property is an array. Check if string value exists in array.
-				if stringInSlice(jsonValue, interfaceListToStrings(arr)) {
+				if lists.ItemInSlice(jsonValue, lists.InterfaceListToStrings(arr)) {
 					return nil
 				}
 				return fmt.Errorf("JSON array property for resourceState %s.%s does not contain expected %s", resourceName, jsonProp, jsonValue)
@@ -215,36 +299,81 @@ func validateValueInJsonPropertiesAttr(resourceName string, attrName string, jso
 	}
 }
 
-func generateJsonEncodedProperties(properties ...string) string {
+func GenerateJsonEncodedProperties(properties ...string) string {
 	return fmt.Sprintf(`jsonencode({
 		%s
 	})
 	`, strings.Join(properties, "\n"))
 }
 
-func generateJsonProperty(propName string, propValue string) string {
+func GenerateJsonProperty(propName string, propValue string) string {
 	return fmt.Sprintf(`"%s" = %s`, propName, propValue)
 }
 
-func generateJsonArrayProperty(propName string, propValues ...string) string {
+func GenerateJsonArrayProperty(propName string, propValues ...string) string {
 	return fmt.Sprintf(`"%s" = [%s]`, propName, strings.Join(propValues, ", "))
 }
 
-func generateJsonObject(properties ...string) string {
+func GenerateJsonObject(properties ...string) string {
 	return fmt.Sprintf(`{
 		%s
 	}`, strings.Join(properties, "\n"))
 }
 
-func generateMapProperty(propName string, propValue string) string {
+func GenerateMapProperty(propName string, propValue string) string {
 	return fmt.Sprintf(`%s = %s`, propName, propValue)
 }
 
-func generateMapAttr(name string, properties ...string) string {
+func GenerateMapAttr(name string, properties ...string) string {
 	return fmt.Sprintf(`%s = {
 		%s
 	}
 	`, name, strings.Join(properties, "\n"))
+}
+
+func GenerateMapAttrWithMapProperties(name string, properties map[string]string) string {
+	var propertiesStr string
+	for k, v := range properties {
+		propertiesStr += GenerateMapProperty(k, v) + "\n"
+	}
+
+	return fmt.Sprintf(`%s = {
+		%s
+	}
+	`, name, propertiesStr)
+}
+
+func GenerateSubstitutionsMap(substitutions map[string]string) string {
+	var substitutionsStr string
+	for k, v := range substitutions {
+		substitutionsStr += fmt.Sprintf("\t%s = \"%s\"\n", k, v)
+	}
+	return fmt.Sprintf(`substitutions = {
+%s}`, substitutionsStr)
+}
+
+func GenerateJsonSchemaDocStr(properties ...string) string {
+	attrType := "type"
+	attrProperties := "properties"
+	typeObject := "object"
+	typeStr := "string" // All string props
+
+	propStrs := []string{}
+	for _, prop := range properties {
+		propStrs = append(propStrs, GenerateJsonProperty(prop, GenerateJsonObject(
+			GenerateJsonProperty(attrType, strconv.Quote(typeStr)),
+		)))
+	}
+	allProps := strings.Join(propStrs, "\n")
+
+	return GenerateJsonEncodedProperties(
+		// First field is required
+		GenerateJsonArrayProperty("required", strconv.Quote(properties[0])),
+		GenerateJsonProperty(attrType, strconv.Quote(typeObject)),
+		GenerateJsonProperty(attrProperties, GenerateJsonObject(
+			allProps,
+		)),
+	)
 }
 
 func randString(length int) string {

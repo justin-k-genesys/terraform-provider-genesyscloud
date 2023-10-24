@@ -16,12 +16,12 @@ func TestAccDataSourceLineBaseSettings(t *testing.T) {
 	lineBaseSettingsDataRes := "lineBaseSettings1234"
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Creating a phone base settings will result in a line base settings of the same name being created
-				Config: generatePhoneBaseSettingsResourceWithCustomAttrs(
+				Config: GeneratePhoneBaseSettingsResourceWithCustomAttrs(
 					phoneBaseSettingsRes,
 					phoneBaseSettingsName,
 					"phoneBaseSettings description",

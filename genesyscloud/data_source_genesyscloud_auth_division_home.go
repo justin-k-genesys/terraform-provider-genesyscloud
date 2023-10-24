@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
-func dataSourceAuthDivisionHome() *schema.Resource {
+func DataSourceAuthDivisionHome() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Divisions. Get the Home division",
-		ReadContext: readWithPooledClient(dataSourceAuthDivisionHomeRead),
+		ReadContext: ReadWithPooledClient(dataSourceAuthDivisionHomeRead),
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Description: "Home division name.",
@@ -33,14 +34,14 @@ func dataSourceAuthDivisionHome() *schema.Resource {
 }
 
 func dataSourceAuthDivisionHomeRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*providerMeta).ClientConfig
+	sdkConfig := m.(*ProviderMeta).ClientConfig
 	authAPI := platformclientv2.NewAuthorizationApiWithConfig(sdkConfig)
 
 	// Query home division
-	return withRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		division, _, getErr := authAPI.GetAuthorizationDivisionsHome()
 		if getErr != nil {
-			return resource.NonRetryableError(fmt.Errorf("Error requesting division: %s", getErr))
+			return retry.NonRetryableError(fmt.Errorf("Error requesting division: %s", getErr))
 		}
 
 		d.SetId(*division.Id)

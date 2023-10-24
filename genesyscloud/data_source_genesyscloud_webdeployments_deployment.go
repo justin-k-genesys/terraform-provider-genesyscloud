@@ -3,18 +3,20 @@ package genesyscloud
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func dataSourceWebDeploymentsDeployment() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Web Deployments. Select a deployment by name.",
-		ReadContext: readWithPooledClient(dataSourceDeploymentRead),
+		ReadContext: ReadWithPooledClient(dataSourceDeploymentRead),
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Description: "The name of the deployment",
@@ -26,16 +28,20 @@ func dataSourceWebDeploymentsDeployment() *schema.Resource {
 }
 
 func dataSourceDeploymentRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*providerMeta).ClientConfig
+	sdkConfig := m.(*ProviderMeta).ClientConfig
 	api := platformclientv2.NewWebDeploymentsApiWithConfig(sdkConfig)
 
 	name := d.Get("name").(string)
 
-	return withRetries(ctx, 15*time.Second, func() *resource.RetryError {
-		deployments, _, err := api.GetWebdeploymentsDeployments()
+	return WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
+		deployments, resp, err := api.GetWebdeploymentsDeployments([]string{})
 
-		if err != nil {
-			return resource.NonRetryableError(fmt.Errorf("Error retrieving web deployment %s: %s", name, err))
+		if err != nil && resp.StatusCode == http.StatusNotFound {
+			return retry.RetryableError(fmt.Errorf("No web deployment record found %s: %s. Correlation id: %s", name, err, resp.CorrelationID))
+		}
+
+		if err != nil && resp.StatusCode != http.StatusNotFound {
+			return retry.NonRetryableError(fmt.Errorf("Error retrieving web deployment %s: %s. Correlation id: %s", name, err, resp.CorrelationID))
 		}
 
 		for _, deployment := range *deployments.Entities {
@@ -45,6 +51,6 @@ func dataSourceDeploymentRead(ctx context.Context, d *schema.ResourceData, m int
 			}
 		}
 
-		return resource.NonRetryableError(fmt.Errorf("No web deployment was found with the name %s", name))
+		return retry.NonRetryableError(fmt.Errorf("No web deployment was found with the name %s", name))
 	})
 }

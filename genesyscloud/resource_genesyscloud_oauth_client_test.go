@@ -27,14 +27,15 @@ func TestAccResourceOAuthClient(t *testing.T) {
 		scope1               = "oauth"
 		stateActive          = "active"
 		stateInactive        = "inactive"
+		credentialName1      = "terraform3" + uuid.NewString()
 
 		roleResource1 = "admin-role"
 		roleName1     = "admin" // Must use a role already assigned to the TF OAuth client
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create client cred client with 1 role in default division
@@ -42,7 +43,7 @@ func TestAccResourceOAuthClient(t *testing.T) {
 					roleResource1,
 					strconv.Quote(roleName1),
 					"",
-				) + generateOauthClient(
+				) + generateOauthClientWithCredential(
 					clientResource1,
 					clientName1,
 					clientDesc1,
@@ -51,6 +52,7 @@ func TestAccResourceOAuthClient(t *testing.T) {
 					nullValue, // Default state
 					generateStringArray(strconv.Quote(redirectURI1)),
 					nullValue, // No scopes for client creds
+					credentialName1,
 					generateOauthClientRoles("data.genesyscloud_auth_role."+roleResource1+".id", nullValue),
 				),
 				Check: resource.ComposeTestCheckFunc(
@@ -59,8 +61,9 @@ func TestAccResourceOAuthClient(t *testing.T) {
 					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "authorized_grant_type", grantTypeClientCreds),
 					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "access_token_validity_seconds", tokenSec1),
 					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "state", stateActive),
+					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "integration_credential_name", credentialName1),
 					resource.TestCheckNoResourceAttr("genesyscloud_oauth_client."+clientResource1, "scopes.%"),
-					validateStringInArray("genesyscloud_oauth_client."+clientResource1, "registered_redirect_uris", redirectURI1),
+					ValidateStringInArray("genesyscloud_oauth_client."+clientResource1, "registered_redirect_uris", redirectURI1),
 					validateOauthRole("genesyscloud_oauth_client."+clientResource1, "data.genesyscloud_auth_role."+roleResource1, ""),
 				),
 			},
@@ -88,7 +91,7 @@ func TestAccResourceOAuthClient(t *testing.T) {
 					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "access_token_validity_seconds", tokenSec2),
 					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "state", stateInactive),
 					resource.TestCheckNoResourceAttr("genesyscloud_oauth_client."+clientResource1, "scopes.%"),
-					validateStringInArray("genesyscloud_oauth_client."+clientResource1, "registered_redirect_uris", redirectURI2),
+					ValidateStringInArray("genesyscloud_oauth_client."+clientResource1, "registered_redirect_uris", redirectURI2),
 				),
 			},
 			{
@@ -111,15 +114,16 @@ func TestAccResourceOAuthClient(t *testing.T) {
 					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "access_token_validity_seconds", tokenSec1),
 					resource.TestCheckResourceAttr("genesyscloud_oauth_client."+clientResource1, "state", stateActive),
 					resource.TestCheckNoResourceAttr("genesyscloud_oauth_client."+clientResource1, "roles.%"),
-					validateStringInArray("genesyscloud_oauth_client."+clientResource1, "registered_redirect_uris", redirectURI1),
-					validateStringInArray("genesyscloud_oauth_client."+clientResource1, "scopes", scope1),
+					ValidateStringInArray("genesyscloud_oauth_client."+clientResource1, "registered_redirect_uris", redirectURI1),
+					ValidateStringInArray("genesyscloud_oauth_client."+clientResource1, "scopes", scope1),
 				),
 			},
 			{
 				// Import/Read
-				ResourceName:      "genesyscloud_oauth_client." + clientResource1,
-				ImportState:       true,
-				ImportStateVerify: true,
+				ResourceName:            "genesyscloud_oauth_client." + clientResource1,
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"integration_credential_id", "integration_credential_name"},
 			},
 		},
 	})
@@ -137,6 +141,21 @@ func generateOauthClient(resourceID, name, description, grantType, tokenSec, sta
         %s
 	}
 	`, resourceID, name, description, grantType, tokenSec, state, uris, scopes, strings.Join(blocks, "\n"))
+}
+
+func generateOauthClientWithCredential(resourceID, name, description, grantType, tokenSec, state, uris, scopes string, credentialName string, blocks ...string) string {
+	return fmt.Sprintf(`resource "genesyscloud_oauth_client" "%s" {
+		name = "%s"
+		description = "%s"
+        authorized_grant_type = "%s"
+        access_token_validity_seconds = %s
+        state = %s
+        registered_redirect_uris = %s
+        scopes = %s
+        integration_credential_name = "%s"
+        %s
+	}
+	`, resourceID, name, description, grantType, tokenSec, state, uris, scopes, credentialName, strings.Join(blocks, "\n"))
 }
 
 func generateOauthClientRoles(roleID string, divisionId string) string {

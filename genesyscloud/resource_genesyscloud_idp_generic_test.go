@@ -7,11 +7,10 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceIdpGeneric(t *testing.T) {
-	t.Parallel()
 	var (
 		name1               = "generic1"
 		name2               = "generic2"
@@ -25,8 +24,8 @@ func TestAccResourceIdpGeneric(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
@@ -43,7 +42,7 @@ func TestAccResourceIdpGeneric(t *testing.T) {
 				),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "name", name1),
-					validateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "issuer_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "target_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "relying_party_identifier", ""),
@@ -68,7 +67,7 @@ func TestAccResourceIdpGeneric(t *testing.T) {
 				),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "name", name2),
-					validateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert2),
+					ValidateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "issuer_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "target_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "relying_party_identifier", relyingPartyID1),
@@ -93,8 +92,55 @@ func TestAccResourceIdpGeneric(t *testing.T) {
 				),
 				Check: resource.ComposeTestCheckFunc(
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "name", name2),
-					validateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert1),
-					validateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert2),
+					ValidateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "issuer_uri", uri2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "target_uri", uri1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "relying_party_identifier", relyingPartyID2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "disabled", falseValue),
+				),
+			},
+			{
+				// Update to one cert in array
+				Config: generateIdpGenericResource(
+					name2,
+					generateStringArray(strconv.Quote(testCert1)),
+					uri2,
+					uri1,
+					strconv.Quote(relyingPartyID2),
+					falseValue, // disabled
+					strconv.Quote(base64Img),
+					trueValue, // Endpoint compression
+					strconv.Quote(nameIDFormatEmail),
+				),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "name", name2),
+					ValidateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "certificates.#", "1"),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "issuer_uri", uri2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "target_uri", uri1),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "relying_party_identifier", relyingPartyID2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "disabled", falseValue),
+				),
+			},
+			{
+				// Update back to two certs in array
+				Config: generateIdpGenericResource(
+					name2,
+					generateStringArray(strconv.Quote(testCert1), strconv.Quote(testCert2)),
+					uri2,
+					uri1,
+					strconv.Quote(relyingPartyID2),
+					falseValue, // disabled
+					strconv.Quote(base64Img),
+					trueValue, // Endpoint compression
+					strconv.Quote(nameIDFormatEmail),
+				),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "name", name2),
+					ValidateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert1),
+					ValidateStringInArray("genesyscloud_idp_generic.generic", "certificates", testCert2),
+					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "certificates.#", "2"),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "issuer_uri", uri2),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "target_uri", uri1),
 					resource.TestCheckResourceAttr("genesyscloud_idp_generic.generic", "relying_party_identifier", relyingPartyID2),
@@ -146,7 +192,7 @@ func testVerifyIdpGenericDestroyed(state *terraform.State) error {
 		generic, resp, err := idpAPI.GetIdentityprovidersGeneric()
 		if generic != nil {
 			return fmt.Errorf("Generic IDP still exists")
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// Generic IDP not found as expected
 			continue
 		} else {

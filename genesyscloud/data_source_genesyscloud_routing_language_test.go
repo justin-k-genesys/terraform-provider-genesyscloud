@@ -16,11 +16,11 @@ func TestAccDataSourceRoutingLanguage(t *testing.T) {
 	)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
-				Config: generateRoutingLanguageResource(
+				Config: GenerateRoutingLanguageResource(
 					langResource,
 					langName,
 				) + generateRoutingLanguageDataSource(langDataSource, "genesyscloud_routing_language."+langResource+".name", "genesyscloud_routing_language."+langResource),

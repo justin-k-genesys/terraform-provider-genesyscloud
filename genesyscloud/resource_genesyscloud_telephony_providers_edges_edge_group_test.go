@@ -8,10 +8,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func TestAccResourceEdgeGroup(t *testing.T) {
+	t.Skip("Skipping this test for now because hybrid customers will not use edge groups and will only be able to modify the existing hybrid edge group. EdgeGroup will need to be refactored.")
 	t.Parallel()
 	var (
 		edgeGroupRes          = "edgeGroup1234"
@@ -26,14 +27,14 @@ func TestAccResourceEdgeGroup(t *testing.T) {
 	)
 
 	// Original phone settings
-	phoneTrunkBaseSetting1 := generateTrunkBaseSettingsResourceWithCustomAttrs(
+	phoneTrunkBaseSetting1 := GenerateTrunkBaseSettingsResourceWithCustomAttrs(
 		phoneTrunkBaseSettingsRes1,
 		"phone trunk base settings "+uuid.NewString(),
 		"",
 		"phone_connections_webrtc.json",
 		"PHONE",
 		false)
-	phoneTrunkBaseSetting2 := generateTrunkBaseSettingsResourceWithCustomAttrs(
+	phoneTrunkBaseSetting2 := GenerateTrunkBaseSettingsResourceWithCustomAttrs(
 		phoneTrunkBaseSettingsRes2,
 		"phone trunk base settings "+uuid.NewString(),
 		"",
@@ -42,7 +43,7 @@ func TestAccResourceEdgeGroup(t *testing.T) {
 		false)
 
 	// Updated phone settings
-	phoneTrunkBaseSetting3 := generateTrunkBaseSettingsResourceWithCustomAttrs(
+	phoneTrunkBaseSetting3 := GenerateTrunkBaseSettingsResourceWithCustomAttrs(
 		phoneTrunkBaseSettingsRes3,
 		"phone trunk base settings "+uuid.NewString(),
 		"",
@@ -51,8 +52,8 @@ func TestAccResourceEdgeGroup(t *testing.T) {
 		false)
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				Config: phoneTrunkBaseSetting1 + phoneTrunkBaseSetting2 + generateEdgeGroupResourceWithCustomAttrs(
@@ -109,7 +110,7 @@ func testVerifyEdgeGroupsDestroyed(state *terraform.State) error {
 		edgeGroup, resp, err := edgeAPI.GetTelephonyProvidersEdgesEdgegroup(rs.Primary.ID, nil)
 		if edgeGroup != nil {
 			return fmt.Errorf("edge group (%s) still exists", rs.Primary.ID)
-		} else if isStatus404(resp) {
+		} else if IsStatus404(resp) {
 			// edge group not found as expected
 			continue
 		} else {

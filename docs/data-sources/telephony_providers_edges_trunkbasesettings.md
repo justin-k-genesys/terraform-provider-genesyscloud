@@ -14,7 +14,7 @@ Data source for Genesys Cloud Trunk Base Settings. Select a trunk base settings 
 
 ```terraform
 data "genesyscloud_telephony_providers_edges_trunkbasesettings" "trunkBaseSetting" {
-  name = "test trunk base settings name"
+  name = "example trunk base settings name"
 }
 ```
 
@@ -28,5 +28,3 @@ data "genesyscloud_telephony_providers_edges_trunkbasesettings" "trunkBaseSettin
 ### Read-Only
 
 - `id` (String) The ID of this resource.
-
-

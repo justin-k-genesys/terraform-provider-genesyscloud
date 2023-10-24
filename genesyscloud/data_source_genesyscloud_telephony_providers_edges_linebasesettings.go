@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func dataSourceLineBaseSettings() *schema.Resource {
 	return &schema.Resource{
 		Description: "Data source for Genesys Cloud Line Base Settings. Select a line base settings by name",
-		ReadContext: readWithPooledClient(dataSourceLineBaseSettingsRead),
+		ReadContext: ReadWithPooledClient(dataSourceLineBaseSettingsRead),
 		Schema: map[string]*schema.Schema{
 			"name": {
 				Description: "Line Base Settings name.",
@@ -26,21 +27,21 @@ func dataSourceLineBaseSettings() *schema.Resource {
 }
 
 func dataSourceLineBaseSettingsRead(ctx context.Context, d *schema.ResourceData, m interface{}) diag.Diagnostics {
-	sdkConfig := m.(*providerMeta).ClientConfig
+	sdkConfig := m.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	name := d.Get("name").(string)
 
-	return withRetries(ctx, 15*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 15*time.Second, func() *retry.RetryError {
 		for pageNum := 1; ; pageNum++ {
 			const pageSize = 50
 			lineBaseSettings, _, getErr := edgesAPI.GetTelephonyProvidersEdgesLinebasesettings(pageNum, pageSize, "", "", nil)
 			if getErr != nil {
-				return resource.NonRetryableError(fmt.Errorf("Error requesting line base settings %s: %s", name, getErr))
+				return retry.NonRetryableError(fmt.Errorf("Error requesting line base settings %s: %s", name, getErr))
 			}
 
 			if lineBaseSettings.Entities == nil || len(*lineBaseSettings.Entities) == 0 {
-				return resource.RetryableError(fmt.Errorf("No lineBaseSettings found with name %s", name))
+				return retry.RetryableError(fmt.Errorf("No lineBaseSettings found with name %s", name))
 			}
 
 			for _, lineBaseSetting := range *lineBaseSettings.Entities {

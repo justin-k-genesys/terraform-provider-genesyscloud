@@ -8,13 +8,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mypurecloud/terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/retry"
+
+	"terraform-provider-genesyscloud/genesyscloud/consistency_checker"
+
+	resourceExporter "terraform-provider-genesyscloud/genesyscloud/resource_exporter"
+	chunksProcess "terraform-provider-genesyscloud/genesyscloud/util/chunks"
+	lists "terraform-provider-genesyscloud/genesyscloud/util/lists"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 	"github.com/nyaruka/phonenumbers"
 )
 
@@ -24,10 +29,10 @@ var (
 	phoneNumberResource = &schema.Resource{
 		Schema: map[string]*schema.Schema{
 			"number": {
-				Description:      "Phone number. Defaults to US country code.",
+				Description:      "Phone number. Phone number must be in an E.164 number format.",
 				Type:             schema.TypeString,
 				Optional:         true,
-				ValidateDiagFunc: validatePhoneNumber,
+				ValidateDiagFunc: ValidatePhoneNumber,
 			},
 			"media_type": {
 				Description:  "Media type of phone number (SMS | PHONE).",
@@ -112,8 +117,8 @@ var (
 	}
 )
 
-func getAllUsers(ctx context.Context, sdkConfig *platformclientv2.Configuration) (ResourceIDMetaMap, diag.Diagnostics) {
-	resources := make(ResourceIDMetaMap)
+func getAllUsers(ctx context.Context, sdkConfig *platformclientv2.Configuration) (resourceExporter.ResourceIDMetaMap, diag.Diagnostics) {
+	resources := make(resourceExporter.ResourceIDMetaMap)
 	usersAPI := platformclientv2.NewUsersApiWithConfig(sdkConfig)
 
 	// Newly created resources often aren't returned unless there's a delay
@@ -121,66 +126,73 @@ func getAllUsers(ctx context.Context, sdkConfig *platformclientv2.Configuration)
 
 	errorChan := make(chan error)
 	wgDone := make(chan bool)
+	usersChan := make(chan platformclientv2.User, 200)
+	defer close(usersChan)
+
 	// Cancel remaining goroutines if an error occurs
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
+
+	getUsersByStatus := func(userStatus string) {
 		defer wg.Done()
-		// get all inactive users
-		for pageNum := 1; ; pageNum++ {
-			const pageSize = 100
-			users, _, getErr := usersAPI.GetUsers(pageSize, pageNum, nil, nil, "", nil, "", "inactive")
-			if getErr != nil {
-				select {
-				case <-ctx.Done():
-				case errorChan <- getErr:
-				}
+
+		const pageSize = 100
+		users, _, err := usersAPI.GetUsers(pageSize, 1, nil, nil, "", nil, "", userStatus)
+		if err != nil {
+			errorChan <- err
+			cancel()
+			return
+		}
+		for _, user := range *users.Entities {
+			usersChan <- user
+		}
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		for pageNum := 2; pageNum <= *users.PageCount; pageNum++ {
+			users, _, err := usersAPI.GetUsers(pageSize, pageNum, nil, nil, "", nil, "", userStatus)
+			if err != nil {
+				errorChan <- err
 				cancel()
 				return
 			}
 
-			if users.Entities == nil || len(*users.Entities) == 0 {
-				break
-			}
-
 			for _, user := range *users.Entities {
-				resources[*user.Id] = &ResourceMeta{Name: *user.Email}
+				usersChan <- user
 			}
-		}
-	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		// get all active users
-		for pageNum := 1; ; pageNum++ {
-			const pageSize = 100
-			users, _, getErr := usersAPI.GetUsers(pageSize, pageNum, nil, nil, "", nil, "", "active")
-			if getErr != nil {
-				select {
-				case <-ctx.Done():
-				case errorChan <- getErr:
-				}
-				cancel()
+			select {
+			case <-ctx.Done():
 				return
-			}
-
-			if users.Entities == nil || len(*users.Entities) == 0 {
-				break
-			}
-
-			for _, user := range *users.Entities {
-				resources[*user.Id] = &ResourceMeta{Name: *user.Email}
+			default:
 			}
 		}
-	}()
+	}
+
+	wg.Add(2)
+	go getUsersByStatus("active")
+	go getUsersByStatus("inactive")
 
 	go func() {
 		wg.Wait()
-		close(wgDone)
+
+		// Make sure the buffer channel is emptied out
+		for {
+			if len(usersChan) == 0 {
+				wgDone <- true
+			}
+		}
+	}()
+
+	go func() {
+		for user := range usersChan {
+			resources[*user.Id] = &resourceExporter.ResourceMeta{Name: *user.Email}
+		}
 	}()
 
 	// Wait until either WaitGroup is done or an error is received
@@ -188,14 +200,14 @@ func getAllUsers(ctx context.Context, sdkConfig *platformclientv2.Configuration)
 	case <-wgDone:
 		return resources, nil
 	case err := <-errorChan:
-		return nil, diag.Errorf("Failed to get page of users: %v", err)
+		return nil, diag.Errorf("Failed to get all users: %v", err)
 	}
 }
 
-func userExporter() *ResourceExporter {
-	return &ResourceExporter{
-		GetResourcesFunc: getAllWithPooledClient(getAllUsers),
-		RefAttrs: map[string]*RefAttrSettings{
+func UserExporter() *resourceExporter.ResourceExporter {
+	return &resourceExporter.ResourceExporter{
+		GetResourcesFunc: GetAllWithPooledClient(getAllUsers),
+		RefAttrs: map[string]*resourceExporter.RefAttrSettings{
 			"manager":                       {RefType: "genesyscloud_user"},
 			"division_id":                   {RefType: "genesyscloud_auth_division"},
 			"routing_skills.skill_id":       {RefType: "genesyscloud_routing_skill"},
@@ -211,14 +223,14 @@ func userExporter() *ResourceExporter {
 	}
 }
 
-func resourceUser() *schema.Resource {
+func ResourceUser() *schema.Resource {
 	return &schema.Resource{
 		Description: "Genesys Cloud User",
 
-		CreateContext: createWithPooledClient(createUser),
-		ReadContext:   readWithPooledClient(readUser),
-		UpdateContext: updateWithPooledClient(updateUser),
-		DeleteContext: deleteWithPooledClient(deleteUser),
+		CreateContext: CreateWithPooledClient(createUser),
+		ReadContext:   ReadWithPooledClient(readUser),
+		UpdateContext: UpdateWithPooledClient(updateUser),
+		DeleteContext: DeleteWithPooledClient(deleteUser),
 		Importer: &schema.ResourceImporter{
 			StateContext: schema.ImportStatePassthroughContext,
 		},
@@ -409,15 +421,6 @@ func resourceUser() *schema.Resource {
 							ConfigMode:  schema.SchemaConfigModeAttr,
 							Elem:        utilizationSettingsResource,
 						},
-						"video": {
-							Description: "Video media settings. If not set, this reverts to the default media type settings.",
-							Type:        schema.TypeList,
-							MaxItems:    1,
-							Optional:    true,
-							Computed:    true,
-							ConfigMode:  schema.SchemaConfigModeAttr,
-							Elem:        utilizationSettingsResource,
-						},
 						"email": {
 							Description: "Email media settings. If not set, this reverts to the default media type settings.",
 							Type:        schema.TypeList,
@@ -454,12 +457,19 @@ func createUser(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 	manager := d.Get("manager").(string)
 	acdAutoAnswer := d.Get("acd_auto_answer").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	usersAPI := platformclientv2.NewUsersApiWithConfig(sdkConfig)
 
 	addresses, addrErr := buildSdkAddresses(d)
 	if addrErr != nil {
 		return addrErr
+	}
+
+	// Check for a deleted user before creating
+	id, _ := getDeletedUserId(email, usersAPI)
+	if id != nil {
+		d.SetId(*id)
+		return restoreDeletedUser(ctx, d, meta, usersAPI)
 	}
 
 	createUser := platformclientv2.Createuser{
@@ -480,6 +490,7 @@ func createUser(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 	}
 
 	log.Printf("Creating user %s", email)
+
 	user, resp, err := usersAPI.PostUsers(createUser)
 	if err != nil {
 		if resp != nil && resp.Error != nil && (*resp.Error).Code == "general.conflict" {
@@ -545,11 +556,11 @@ func createUser(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 }
 
 func readUser(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	usersAPI := platformclientv2.NewUsersApiWithConfig(sdkConfig)
 
 	log.Printf("Reading user %s", d.Id())
-	return withRetriesForRead(ctx, d, func() *resource.RetryError {
+	return WithRetriesForRead(ctx, d, func() *retry.RetryError {
 		currentUser, resp, getErr := usersAPI.GetUser(d.Id(), []string{
 			// Expands
 			"skills",
@@ -561,13 +572,13 @@ func readUser(ctx context.Context, d *schema.ResourceData, meta interface{}) dia
 		}, "", "")
 
 		if getErr != nil {
-			if isStatus404(resp) {
-				return resource.RetryableError(fmt.Errorf("Failed to read user %s: %s", d.Id(), getErr))
+			if IsStatus404(resp) {
+				return retry.RetryableError(fmt.Errorf("Failed to read user %s: %s", d.Id(), getErr))
 			}
-			return resource.NonRetryableError(fmt.Errorf("Failed to read user %s: %s", d.Id(), getErr))
+			return retry.NonRetryableError(fmt.Errorf("Failed to read user %s: %s", d.Id(), getErr))
 		}
 
-		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, resourceUser())
+		cc := consistency_checker.NewConsistencyCheck(ctx, d, meta, ResourceUser())
 
 		// Required attributes
 		d.Set("name", *currentUser.Name)
@@ -608,7 +619,7 @@ func readUser(ctx context.Context, d *schema.ResourceData, meta interface{}) dia
 		d.Set("employer_info", flattenUserEmployerInfo(currentUser.EmployerInfo))
 
 		if diagErr := readUserRoutingUtilization(d, usersAPI); diagErr != nil {
-			return resource.NonRetryableError(fmt.Errorf("%v", diagErr))
+			return retry.NonRetryableError(fmt.Errorf("%v", diagErr))
 		}
 
 		log.Printf("Read user %s %s", d.Id(), *currentUser.Email)
@@ -625,7 +636,7 @@ func updateUser(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 	manager := d.Get("manager").(string)
 	acdAutoAnswer := d.Get("acd_auto_answer").(bool)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	usersAPI := platformclientv2.NewUsersApiWithConfig(sdkConfig)
 
 	addresses, err := buildSdkAddresses(d)
@@ -694,11 +705,11 @@ func updateUser(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 func deleteUser(ctx context.Context, d *schema.ResourceData, meta interface{}) diag.Diagnostics {
 	email := d.Get("email").(string)
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	usersAPI := platformclientv2.NewUsersApiWithConfig(sdkConfig)
 
 	log.Printf("Deleting user %s", email)
-	err := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	err := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		// Directory occasionally returns version errors on deletes if an object was updated at the same time.
 		_, resp, err := usersAPI.DeleteUser(d.Id())
 		if err != nil {
@@ -713,13 +724,13 @@ func deleteUser(ctx context.Context, d *schema.ResourceData, meta interface{}) d
 	}
 
 	// Verify user in deleted state and search index has been updated
-	return withRetries(ctx, 180*time.Second, func() *resource.RetryError {
+	return WithRetries(ctx, 180*time.Second, func() *retry.RetryError {
 		id, err := getDeletedUserId(email, usersAPI)
 		if err != nil {
-			return resource.NonRetryableError(fmt.Errorf("Error searching for deleted user %s: %v", email, err))
+			return retry.NonRetryableError(fmt.Errorf("Error searching for deleted user %s: %v", email, err))
 		}
 		if id == nil {
-			return resource.RetryableError(fmt.Errorf("User %s not yet in deleted state", email))
+			return retry.RetryableError(fmt.Errorf("User %s not yet in deleted state", email))
 		}
 		return nil
 	})
@@ -730,7 +741,7 @@ func patchUser(id string, update platformclientv2.Updateuser, usersAPI *platform
 }
 
 func patchUserWithState(id string, state string, update platformclientv2.Updateuser, usersAPI *platformclientv2.UsersApi) diag.Diagnostics {
-	return retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+	return RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 		currentUser, _, getErr := usersAPI.GetUser(id, nil, "", state)
 		if getErr != nil {
 			return nil, diag.Errorf("Failed to read user %s: %s", id, getErr)
@@ -920,7 +931,7 @@ func buildSdkEmployerInfo(d *schema.ResourceData) *platformclientv2.Employerinfo
 
 func buildSdkCertifications(d *schema.ResourceData) *[]string {
 	if certs := d.Get("certifications"); certs != nil {
-		return setToStringList(certs.(*schema.Set))
+		return lists.SetToStringList(certs.(*schema.Set))
 	}
 	return nil
 }
@@ -1052,7 +1063,7 @@ func flattenUserEmployerInfo(empInfo *platformclientv2.Employerinfo) []interface
 func readUserRoutingUtilization(d *schema.ResourceData, usersAPI *platformclientv2.UsersApi) diag.Diagnostics {
 	settings, resp, getErr := usersAPI.GetRoutingUserUtilization(d.Id())
 	if getErr != nil {
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			d.SetId("") // User doesn't exist
 			return nil
 		}
@@ -1080,29 +1091,37 @@ func readUserRoutingUtilization(d *schema.ResourceData, usersAPI *platformclient
 }
 
 func updateUserSkills(d *schema.ResourceData, usersAPI *platformclientv2.UsersApi) diag.Diagnostics {
+
+	transformFunc := func(configSkill interface{}) platformclientv2.Userroutingskillpost {
+		skillMap := configSkill.(map[string]interface{})
+		skillID := skillMap["skill_id"].(string)
+		skillProf := skillMap["proficiency"].(float64)
+
+		return platformclientv2.Userroutingskillpost{
+			Id:          &skillID,
+			Proficiency: &skillProf,
+		}
+	}
+
+	chunkProcessor := func(chunk []platformclientv2.Userroutingskillpost) diag.Diagnostics {
+		diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+			_, resp, err := usersAPI.PatchUserRoutingskillsBulk(d.Id(), chunk)
+			if err != nil {
+				return resp, diag.Errorf("Failed to update skills for user %s: %s", d.Id(), err)
+			}
+			return nil, nil
+		})
+		if diagErr != nil {
+			return diagErr
+		}
+		return nil
+	}
+
 	if d.HasChange("routing_skills") {
 		if skillsConfig := d.Get("routing_skills"); skillsConfig != nil {
-			sdkSkills := make([]platformclientv2.Userroutingskillpost, 0)
-
 			skillsList := skillsConfig.(*schema.Set).List()
-			for _, configSkill := range skillsList {
-				skillMap := configSkill.(map[string]interface{})
-				skillID := skillMap["skill_id"].(string)
-				skillProf := skillMap["proficiency"].(float64)
-
-				sdkSkills = append(sdkSkills, platformclientv2.Userroutingskillpost{
-					Id:          &skillID,
-					Proficiency: &skillProf,
-				})
-			}
-
-			return retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
-				_, resp, err := usersAPI.PutUserRoutingskillsBulk(d.Id(), sdkSkills)
-				if err != nil {
-					return resp, diag.Errorf("Failed to update skills for user %s: %s", d.Id(), err)
-				}
-				return nil, nil
-			})
+			chunks := chunksProcess.ChunkItems(skillsList, transformFunc, 50)
+			return chunksProcess.ProcessChunks(chunks, chunkProcessor)
 		}
 	}
 	return nil
@@ -1134,9 +1153,9 @@ func updateUserLanguages(d *schema.ResourceData, usersAPI *platformclientv2.User
 			}
 
 			if len(oldLangIds) > 0 {
-				langsToRemove := sliceDifference(oldLangIds, newLangIds)
+				langsToRemove := lists.SliceDifference(oldLangIds, newLangIds)
 				for _, langID := range langsToRemove {
-					diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+					diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 						resp, err := usersAPI.DeleteUserRoutinglanguage(d.Id(), langID)
 						if err != nil {
 							return resp, diag.Errorf("Failed to remove language from user %s: %s", d.Id(), err)
@@ -1151,7 +1170,7 @@ func updateUserLanguages(d *schema.ResourceData, usersAPI *platformclientv2.User
 
 			if len(newLangIds) > 0 {
 				// Languages to add
-				langsToAddOrUpdate := sliceDifference(newLangIds, oldLangIds)
+				langsToAddOrUpdate := lists.SliceDifference(newLangIds, oldLangIds)
 
 				// Check for existing proficiencies to update which can be done with the same API
 				for langID, newNum := range newLangProfs {
@@ -1196,42 +1215,43 @@ func updateUserRoutingLanguages(
 	api *platformclientv2.UsersApi) diag.Diagnostics {
 	// Bulk API restricts language adds to 50 per call
 	const maxBatchSize = 50
-	for i := 0; i < len(langsToUpdate); i += maxBatchSize {
-		end := i + maxBatchSize
-		if end > len(langsToUpdate) {
-			end = len(langsToUpdate)
-		}
-		var updateChunk []platformclientv2.Userroutinglanguagepost
-		for _, id := range langsToUpdate[i:end] {
-			newProf := float64(langProfs[id])
-			tempId := id
-			updateChunk = append(updateChunk, platformclientv2.Userroutinglanguagepost{
-				Id:          &tempId,
-				Proficiency: &newProf,
-			})
-		}
 
-		if len(updateChunk) > 0 {
-			diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
-				_, resp, err := api.PatchUserRoutinglanguagesBulk(userID, updateChunk)
-				if err != nil {
-					return resp, diag.Errorf("Failed to update languages for user %s: %s", userID, err)
-				}
-				return nil, nil
-			})
-			if diagErr != nil {
-				return diagErr
-			}
+	chunkBuild := func(val string) platformclientv2.Userroutinglanguagepost {
+		newProf := float64(langProfs[val])
+		return platformclientv2.Userroutinglanguagepost{
+			Id:          &val,
+			Proficiency: &newProf,
 		}
 	}
-	return nil
+
+	// Generic call to prepare chunks for the Update. Takes in three args
+	// 1. langsToUpdate 2. The Entity prepare func for the update 3. Chunk Size
+	chunks := chunksProcess.ChunkItems(langsToUpdate, chunkBuild, maxBatchSize)
+	// Closure to process the chunks
+
+	chunkProcessor := func(chunk []platformclientv2.Userroutinglanguagepost) diag.Diagnostics {
+		diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+			_, resp, err := api.PatchUserRoutinglanguagesBulk(userID, chunk)
+			if err != nil {
+				return resp, diag.Errorf("Failed to update languages for user %s: %s", userID, err)
+			}
+			return nil, nil
+		})
+		if diagErr != nil {
+			return diagErr
+		}
+		return nil
+	}
+
+	// Genric Function call which takes in the chunks and the processing function
+	return chunksProcess.ProcessChunks(chunks, chunkProcessor)
 }
 
 func updateUserProfileSkills(d *schema.ResourceData, usersAPI *platformclientv2.UsersApi) diag.Diagnostics {
 	if d.HasChange("profile_skills") {
 		if profileSkills := d.Get("profile_skills"); profileSkills != nil {
-			profileSkills := setToStringList(profileSkills.(*schema.Set))
-			diagErr := retryWhen(isVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
+			profileSkills := lists.SetToStringList(profileSkills.(*schema.Set))
+			diagErr := RetryWhen(IsVersionMismatch, func() (*platformclientv2.APIResponse, diag.Diagnostics) {
 				_, resp, err := usersAPI.PutUserProfileskills(d.Id(), *profileSkills)
 				if err != nil {
 					return resp, diag.Errorf("Failed to update profile skills for user %s: %s", d.Id(), err)
@@ -1324,14 +1344,53 @@ func flattenUserLocations(locations *[]platformclientv2.Location) *schema.Set {
 
 func flattenUserProfileSkills(skills *[]string) *schema.Set {
 	if skills != nil {
-		return stringListToSet(*skills)
+		return lists.StringListToSet(*skills)
 	}
 	return nil
 }
 
 func flattenUserCertifications(certs *[]string) *schema.Set {
 	if certs != nil {
-		return stringListToSet(*certs)
+		return lists.StringListToSet(*certs)
 	}
 	return nil
+}
+
+// Basic user with minimum required fields
+func GenerateBasicUserResource(resourceID string, email string, name string) string {
+	return GenerateUserResource(resourceID, email, name, nullValue, nullValue, nullValue, nullValue, nullValue, "", "")
+}
+
+func GenerateUserResource(
+	resourceID string,
+	email string,
+	name string,
+	state string,
+	title string,
+	department string,
+	manager string,
+	acdAutoAnswer string,
+	profileSkills string,
+	certifications string) string {
+	return fmt.Sprintf(`resource "genesyscloud_user" "%s" {
+		email = "%s"
+		name = "%s"
+		state = %s
+		title = %s
+		department = %s
+		manager = %s
+		acd_auto_answer = %s
+		profile_skills = [%s]
+		certifications = [%s]
+	}
+	`, resourceID, email, name, state, title, department, manager, acdAutoAnswer, profileSkills, certifications)
+}
+
+func GenerateUserWithCustomAttrs(resourceID string, email string, name string, attrs ...string) string {
+	return fmt.Sprintf(`resource "genesyscloud_user" "%s" {
+		email = "%s"
+		name = "%s"
+		%s
+	}
+	`, resourceID, email, name, strings.Join(attrs, "\n"))
 }

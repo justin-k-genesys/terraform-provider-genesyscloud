@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/resource"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 type extensionPoolStruct struct {
@@ -23,7 +23,7 @@ func TestAccResourceExtensionPoolBasic(t *testing.T) {
 	extensionPoolResource1 := "test-extensionpool1"
 	extensionPoolStartNumber1 := "15000"
 	extensionPoolEndNumber1 := "15001"
-	err := authorizeSdk()
+	_, err := AuthorizeSdk()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,8 +33,8 @@ func TestAccResourceExtensionPoolBasic(t *testing.T) {
 	extensionPoolDescription1 := "Test description"
 
 	resource.Test(t, resource.TestCase{
-		PreCheck:          func() { testAccPreCheck(t) },
-		ProviderFactories: providerFactories,
+		PreCheck:          func() { TestAccPreCheck(t) },
+		ProviderFactories: GetProviderFactories(providerResources, providerDataSources),
 		Steps: []resource.TestStep{
 			{
 				// Create
@@ -128,7 +128,7 @@ func testVerifyExtensionPoolsDestroyed(state *terraform.State) error {
 			return fmt.Errorf("Extension Pool (%s) still exists", rs.Primary.ID)
 		}
 
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			// Extension pool not found as expected
 			continue
 		}

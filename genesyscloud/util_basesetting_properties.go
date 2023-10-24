@@ -7,14 +7,14 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	"github.com/mypurecloud/platform-client-sdk-go/v72/platformclientv2"
+	"github.com/mypurecloud/platform-client-sdk-go/v115/platformclientv2"
 )
 
 func buildBaseSettingsProperties(d *schema.ResourceData) *map[string]interface{} {
 	returnValue := make(map[string]interface{})
 
 	if properties := d.Get("properties"); properties != nil {
-		inputVal, err := jsonStringToInterface(properties.(string))
+		inputVal, err := JsonStringToInterface(properties.(string))
 		if err != nil {
 			return nil
 		}
@@ -47,13 +47,13 @@ func customizePhoneBaseSettingsPropertiesDiff(ctx context.Context, diff *schema.
 		return nil
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	// Retrieve defaults from the settings
 	phoneBaseSetting, resp, getErr := edgesAPI.GetTelephonyProvidersEdgesPhonebasesetting(id)
 	if getErr != nil {
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			return nil
 		}
 		return fmt.Errorf("Failed to read phone base settings %s: %s", id, getErr)
@@ -74,13 +74,13 @@ func customizeTrunkBaseSettingsPropertiesDiff(ctx context.Context, diff *schema.
 		return nil
 	}
 
-	sdkConfig := meta.(*providerMeta).ClientConfig
+	sdkConfig := meta.(*ProviderMeta).ClientConfig
 	edgesAPI := platformclientv2.NewTelephonyProvidersEdgeApiWithConfig(sdkConfig)
 
 	// Retrieve defaults from the settings
 	trunkBaseSetting, resp, getErr := edgesAPI.GetTelephonyProvidersEdgesTrunkbasesetting(id, true)
 	if getErr != nil {
-		if isStatus404(resp) {
+		if IsStatus404(resp) {
 			return nil
 		}
 		return fmt.Errorf("Failed to read phone base settings %s: %s", id, getErr)

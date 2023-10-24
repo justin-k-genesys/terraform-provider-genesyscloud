@@ -27,7 +27,7 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_user" "test_user" {
+resource "genesyscloud_user" "example_user" {
   email           = "john@example.com"
   name            = "John Doe"
   password        = "initial-password"
@@ -35,7 +35,7 @@ resource "genesyscloud_user" "test_user" {
   state           = "active"
   department      = "Development"
   title           = "Senior Director"
-  manager         = genesyscloud_user.test-user-manager.id
+  manager         = genesyscloud_user.example-user-manager.id
   acd_auto_answer = true
   profile_skills  = ["Java", "Go"]
   certifications  = ["Certified Developer"]
@@ -45,7 +45,7 @@ resource "genesyscloud_user" "test_user" {
       type    = "HOME"
     }
     phone_numbers {
-      number     = "3174181234"
+      number     = "+13174181234"
       media_type = "PHONE"
       type       = "MOBILE"
     }
@@ -87,11 +87,6 @@ resource "genesyscloud_user" "test_user" {
       maximum_capacity          = 2
       include_non_acd           = false
       interruptible_media_types = ["call", "chat"]
-    }
-    video {
-      maximum_capacity          = 1
-      include_non_acd           = false
-      interruptible_media_types = ["call"]
     }
     message {
       maximum_capacity          = 4
@@ -209,7 +204,6 @@ Optional:
 - `chat` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--chat))
 - `email` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--email))
 - `message` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--message))
-- `video` (List of Object) (see [below for nested schema](#nestedobjatt--routing_utilization--video))
 
 <a id="nestedobjatt--routing_utilization--call"></a>
 ### Nested Schema for `routing_utilization.call`
@@ -253,16 +247,6 @@ Optional:
 
 <a id="nestedobjatt--routing_utilization--message"></a>
 ### Nested Schema for `routing_utilization.message`
-
-Optional:
-
-- `include_non_acd` (Boolean)
-- `interruptible_media_types` (Set of String)
-- `maximum_capacity` (Number)
-
-
-<a id="nestedobjatt--routing_utilization--video"></a>
-### Nested Schema for `routing_utilization.video`
 
 Optional:
 

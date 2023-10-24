@@ -21,8 +21,8 @@ The following Genesys Cloud APIs are used by this resource. Ensure your OAuth Cl
 ## Example Usage
 
 ```terraform
-resource "genesyscloud_telephony_providers_edges_phone" "test_phone" {
-  name                   = "test phone"
+resource "genesyscloud_telephony_providers_edges_phone" "example_phone" {
+  name                   = "example phone"
   state                  = "active"
   site_id                = genesyscloud_telephony_providers_edges_site.site.id
   phone_base_settings_id = genesyscloud_telephony_providers_edges_phonebasesettings.phone-base-settings.id
@@ -56,7 +56,7 @@ resource "genesyscloud_telephony_providers_edges_phone" "test_phone" {
 ### Optional
 
 - `capabilities` (Block List, Max: 1) Phone Capabilities. (see [below for nested schema](#nestedblock--capabilities))
-- `line_addresses` (List of String) Ordered list of Line DIDs for standalone phones.
+- `line_addresses` (List of String) Ordered list of Line DIDs for standalone phones.  Each phone number must be in an E.164 phone number format.
 - `line_base_settings_id` (String) Line Base Settings ID.
 - `phone_meta_base_id` (String) Phone Meta Base ID.
 - `state` (String) Indicates if the resource is active, inactive, or deleted. Valid values: active, inactive, deleted. Defaults to `active`.
